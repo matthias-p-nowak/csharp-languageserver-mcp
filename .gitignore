@@ -1,1 +1,5 @@
 tmp/
+bin/
+obj/
+previous_work/
+publish/
