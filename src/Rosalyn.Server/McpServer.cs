@@ -916,13 +916,22 @@ internal sealed class McpServer
                 return CreateToolError("Missing required argument: path");
 
             if (!request.TryGetProperty("params", out var glP) ||
-                !glP.TryGetProperty("arguments", out var glArgs) ||
-                !glArgs.TryGetProperty("start_line", out var slProp) || slProp.ValueKind != JsonValueKind.Number ||
-                !glArgs.TryGetProperty("end_line", out var elProp) || elProp.ValueKind != JsonValueKind.Number)
+                !glP.TryGetProperty("arguments", out var glArgs))
                 return CreateToolError("Missing required arguments: start_line, end_line");
 
-            var startLine = slProp.GetInt32();
-            var endLine = elProp.GetInt32();
+            if (!glArgs.TryGetProperty("start_line", out var slProp) ||
+                !glArgs.TryGetProperty("end_line", out var elProp))
+                return CreateToolError("Missing required arguments: start_line, end_line");
+
+            var startLine = slProp.ValueKind == JsonValueKind.Number
+                ? slProp.GetInt32()
+                : int.TryParse(slProp.GetString(), out var sl) ? sl : 0;
+            var endLine = elProp.ValueKind == JsonValueKind.Number
+                ? elProp.GetInt32()
+                : int.TryParse(elProp.GetString(), out var el) ? el : 0;
+
+            if (startLine <= 0 || endLine <= 0)
+                return CreateToolError("Arguments 'start_line' and 'end_line' must be positive integers.");
 
             if (!inspector.TryGetLines(sessionRoot, path, startLine, endLine, out var text, out var error))
                 return CreateToolError(error ?? "Unknown get_lines error.");
