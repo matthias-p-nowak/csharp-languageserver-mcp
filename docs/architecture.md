@@ -26,7 +26,8 @@ Tool specs live in `docs/tools/<tool-name>.md`. See the registry in `docs/design
 
 ## Semantic compilation
 - On `set_root`, `RoslynInspector.LoadProjects` discovers all `.csproj` files under the session root.
-- For each project, `obj/**/*.dll` files are loaded as `MetadataReference`s; all `.cs` files in the project directory are parsed into `SyntaxTree`s.
+- BCL reference assemblies are resolved by running `dotnet --info` to find the SDK base path, then locating `packs/Microsoft.NETCore.App.Ref/<version>/ref/net*/` relative to the dotnet root.
+- For each project, BCL refs plus `obj/**/*.dll` files are loaded as `MetadataReference`s; all `.cs` files in the project directory are parsed into `SyntaxTree`s.
 - One `CSharpCompilation` per project is built in-memory and cached for the session lifetime.
 - Semantic tools resolve a project by relative `.csproj` path (`project` argument). If omitted and exactly one project exists, it is used automatically. If multiple projects exist, the tool returns an error listing available keys.
 

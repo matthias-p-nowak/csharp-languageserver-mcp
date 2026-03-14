@@ -28,7 +28,7 @@ internal sealed class RoslynInspector
 
     /// <summary>
     /// Discovers all .csproj files under <paramref name="sessionRoot"/>, loads their
-    /// obj/**/*.dll reference assemblies, and builds an in-memory
+    /// obj/**/*.dll reference assemblies plus BCL ref packs, and builds an in-memory
     /// <see cref="CSharpCompilation"/> per project. Results are cached for the session.
     /// </summary>
     /// <param name="sessionRoot">Absolute session root path.</param>
@@ -36,13 +36,14 @@ internal sealed class RoslynInspector
     {
         var compilations = new Dictionary<string, CSharpCompilation>(StringComparer.OrdinalIgnoreCase);
         var trees = new Dictionary<string, IReadOnlyList<SyntaxTree>>(StringComparer.OrdinalIgnoreCase);
+        var bclRefs = ResolveBclReferences();
 
         foreach (var csproj in Directory.EnumerateFiles(sessionRoot, "*.csproj", SearchOption.AllDirectories))
         {
             var projectDir = Path.GetDirectoryName(csproj)!;
             var objDir = Path.Combine(projectDir, "obj");
 
-            var references = new List<MetadataReference>();
+            var references = new List<MetadataReference>(bclRefs);
             if (Directory.Exists(objDir))
             {
                 foreach (var dll in Directory.EnumerateFiles(objDir, "*.dll", SearchOption.AllDirectories))
@@ -73,6 +74,93 @@ internal sealed class RoslynInspector
 
         projectCompilations = compilations;
         projectTrees = trees;
+    }
+
+    /// <summary>
+    /// Resolves BCL reference assemblies from the .NET SDK ref packs.
+    /// Locates the SDK root via <c>dotnet --info</c>, then finds
+    /// <c>packs/Microsoft.NETCore.App.Ref/&lt;version&gt;/ref/net*</c>.
+    /// Returns an empty list if the ref pack cannot be found.
+    /// </summary>
+    private static IReadOnlyList<MetadataReference> ResolveBclReferences()
+    {
+        try
+        {
+            // Get SDK base path, e.g. /usr/lib64/dotnet-sdk-9.0/sdk/9.0.111/
+            var info = RunProcess("dotnet", "--info");
+            var basePath = info
+                .Split('\n')
+                .Select(l => l.Trim())
+                .Where(l => l.StartsWith("Base Path:", StringComparison.OrdinalIgnoreCase))
+                .Select(l => l["Base Path:".Length..].Trim())
+                .FirstOrDefault();
+
+            if (string.IsNullOrWhiteSpace(basePath) || !Directory.Exists(basePath))
+            {
+                return Array.Empty<MetadataReference>();
+            }
+
+            // Walk up to dotnet root: .../sdk/9.0.111/ -> .../
+            var sdkRoot = Path.GetFullPath(Path.Combine(basePath, "..", ".."));
+            var packsDir = Path.Combine(sdkRoot, "packs", "Microsoft.NETCore.App.Ref");
+
+            if (!Directory.Exists(packsDir))
+            {
+                return Array.Empty<MetadataReference>();
+            }
+
+            // Pick highest version directory.
+            var versionDir = Directory.EnumerateDirectories(packsDir)
+                .OrderByDescending(d => d)
+                .FirstOrDefault();
+
+            if (versionDir is null)
+            {
+                return Array.Empty<MetadataReference>();
+            }
+
+            // Pick first ref/net* subdirectory (e.g. ref/net9.0).
+            var refDir = Directory.EnumerateDirectories(Path.Combine(versionDir, "ref"))
+                .FirstOrDefault();
+
+            if (refDir is null || !Directory.Exists(refDir))
+            {
+                return Array.Empty<MetadataReference>();
+            }
+
+            var refs = new List<MetadataReference>();
+            foreach (var dll in Directory.EnumerateFiles(refDir, "*.dll"))
+            {
+                try { refs.Add(MetadataReference.CreateFromFile(dll)); }
+                catch { /* skip unreadable */ }
+            }
+
+            return refs;
+        }
+        catch
+        {
+            return Array.Empty<MetadataReference>();
+        }
+    }
+
+    /// <summary>
+    /// Runs a process and returns its stdout as a string.
+    /// </summary>
+    private static string RunProcess(string fileName, string arguments)
+    {
+        using var process = new System.Diagnostics.Process();
+        process.StartInfo = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = fileName,
+            Arguments = arguments,
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        process.Start();
+        var output = process.StandardOutput.ReadToEnd();
+        process.WaitForExit();
+        return output;
     }
 
     /// <summary>
