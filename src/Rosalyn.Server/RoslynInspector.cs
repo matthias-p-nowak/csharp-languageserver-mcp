@@ -53,9 +53,15 @@ internal sealed class RoslynInspector
                 }
             }
 
+            var objPath = Path.Combine(projectDir, "obj") + Path.DirectorySeparatorChar;
             var syntaxTrees = new List<SyntaxTree>();
             foreach (var cs in Directory.EnumerateFiles(projectDir, "*.cs", SearchOption.AllDirectories))
             {
+                if (cs.StartsWith(objPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
                 var source = File.ReadAllText(cs);
                 syntaxTrees.Add(CSharpSyntaxTree.ParseText(source, path: cs));
             }
