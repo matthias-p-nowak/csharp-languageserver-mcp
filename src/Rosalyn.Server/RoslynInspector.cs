@@ -27,9 +27,10 @@ internal sealed class RoslynInspector
     }
 
     /// <summary>
-    /// Discovers all .csproj files under <paramref name="sessionRoot"/>, loads their
-    /// obj/**/*.dll reference assemblies plus BCL ref packs, and builds an in-memory
-    /// <see cref="CSharpCompilation"/> per project. Results are cached for the session.
+    /// Discovers all .csproj files under <paramref name="sessionRoot"/>, loads NuGet
+    /// references from <c>project.assets.json</c> plus BCL ref packs, and builds an
+    /// in-memory <see cref="CSharpCompilation"/> per project. Results are cached for
+    /// the session.
     /// </summary>
     /// <param name="sessionRoot">Absolute session root path.</param>
     public void LoadProjects(string sessionRoot)
@@ -41,16 +42,12 @@ internal sealed class RoslynInspector
         foreach (var csproj in Directory.EnumerateFiles(sessionRoot, "*.csproj", SearchOption.AllDirectories))
         {
             var projectDir = Path.GetDirectoryName(csproj)!;
-            var objDir = Path.Combine(projectDir, "obj");
 
             var references = new List<MetadataReference>(bclRefs);
-            if (Directory.Exists(objDir))
+            foreach (var dll in ResolveNuGetReferences(projectDir))
             {
-                foreach (var dll in Directory.EnumerateFiles(objDir, "*.dll", SearchOption.AllDirectories))
-                {
-                    try { references.Add(MetadataReference.CreateFromFile(dll)); }
-                    catch { /* skip unreadable assemblies */ }
-                }
+                try { references.Add(MetadataReference.CreateFromFile(dll)); }
+                catch { /* skip unreadable assemblies */ }
             }
 
             var objPath = Path.Combine(projectDir, "obj") + Path.DirectorySeparatorChar;
@@ -146,6 +143,81 @@ internal sealed class RoslynInspector
         catch
         {
             return Array.Empty<MetadataReference>();
+        }
+    }
+
+    /// <summary>
+    /// Resolves NuGet compile-time reference DLL paths from <c>project.assets.json</c>.
+    /// Returns absolute paths to all compile-time assemblies listed in the asset file.
+    /// Returns an empty enumerable if the asset file is missing or malformed.
+    /// </summary>
+    private static IEnumerable<string> ResolveNuGetReferences(string projectDir)
+    {
+        var assetsPath = Path.Combine(projectDir, "obj", "project.assets.json");
+        if (!File.Exists(assetsPath))
+        {
+            yield break;
+        }
+
+        System.Text.Json.JsonDocument doc;
+        try
+        {
+            doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(assetsPath));
+        }
+        catch
+        {
+            yield break;
+        }
+
+        using (doc)
+        {
+            // packageFolders: { "/home/me/.nuget/packages/": {} }
+            var packageFolders = doc.RootElement
+                .GetProperty("packageFolders")
+                .EnumerateObject()
+                .Select(p => p.Name)
+                .ToList();
+
+            // targets: { "net9.0": { "PackageName/version": { "compile": { "lib/net8.0/Foo.dll": {} } } } }
+            var targets = doc.RootElement.GetProperty("targets");
+            // Pick first target (e.g. "net9.0"); skip RID-specific targets (contain "/")
+            var targetEntry = targets.EnumerateObject()
+                .FirstOrDefault(t => !t.Name.Contains('/'));
+
+            if (targetEntry.Value.ValueKind != System.Text.Json.JsonValueKind.Object)
+            {
+                yield break;
+            }
+
+            foreach (var package in targetEntry.Value.EnumerateObject())
+            {
+                if (!package.Value.TryGetProperty("compile", out var compileAssets))
+                {
+                    continue;
+                }
+
+                // package.Name is "PackageName/version"
+                var slash = package.Name.LastIndexOf('/');
+                if (slash < 0) continue;
+                var packageId = package.Name[..slash].ToLowerInvariant();
+                var version = package.Name[(slash + 1)..];
+
+                foreach (var asset in compileAssets.EnumerateObject())
+                {
+                    // asset.Name is a relative path like "lib/net8.0/Foo.dll"
+                    if (asset.Name.EndsWith("/_._", StringComparison.Ordinal)) continue;
+
+                    foreach (var folder in packageFolders)
+                    {
+                        var candidate = Path.Combine(folder, packageId, version, asset.Name.Replace('/', Path.DirectorySeparatorChar));
+                        if (File.Exists(candidate))
+                        {
+                            yield return candidate;
+                            break;
+                        }
+                    }
+                }
+            }
         }
     }
 
