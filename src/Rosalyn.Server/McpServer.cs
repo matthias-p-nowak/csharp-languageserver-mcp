@@ -24,6 +24,7 @@ internal sealed class McpServer
     private MessageFramingMode framingMode;
     private bool exitRequested;
     private string? sessionRoot;
+    private readonly Dictionary<string, Func<JsonElement, object>> _toolDispatch;
 
     /// <summary>
     /// Creates a server with a list of allowed directories.
@@ -35,6 +36,25 @@ internal sealed class McpServer
         jsonOptions = new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        };
+        _toolDispatch = new Dictionary<string, Func<JsonElement, object>>(StringComparer.Ordinal)
+        {
+            ["set_root"]                      = HandleSetRoot,
+            ["roslyn_syntax_summary"]         = HandleRoslynSyntaxSummary,
+            ["roslyn_complexity_report"]      = HandleRoslynComplexityReport,
+            ["find_symbol"]                   = HandleFindSymbol,
+            ["get_document_symbols"]          = HandleGetDocumentSymbols,
+            ["get_project_for_file"]          = HandleGetProjectForFile,
+            ["get_method_body"]               = HandleGetMethodBody,
+            ["find_references"]               = HandleFindReferences,
+            ["get_symbol_definition"]         = HandleGetSymbolDefinition,
+            ["get_semantic_diagnostics"]      = HandleGetSemanticDiagnostics,
+            ["get_namespace_for_file"]        = HandleGetNamespaceForFile,
+            ["list_source_files"]             = HandleListSourceFiles,
+            ["get_members"]                   = HandleGetMembers,
+            ["get_interface_implementations"] = HandleGetInterfaceImplementations,
+            ["get_lines"]                     = HandleGetLines,
+            ["get_call_hierarchy"]            = HandleGetCallHierarchy,
         };
     }
 
@@ -559,425 +579,250 @@ internal sealed class McpServer
         return true;
     }
 
+    /// <summary>
+    /// Dispatches a tools/call request to the appropriate handler.
+    /// </summary>
     private object CallTool(JsonElement request)
     {
         if (!TryGetStringProperty(request, out var toolName, "params", "name") || string.IsNullOrWhiteSpace(toolName))
-        {
             return CreateToolError("Missing tool name.");
-        }
-
-        if (string.Equals(toolName, "set_root", StringComparison.Ordinal))
-        {
-            if (!TryGetStringProperty(request, out var rootPath, "params", "arguments", "path") || string.IsNullOrWhiteSpace(rootPath))
-            {
-                return CreateToolError("Missing required argument: path");
-            }
-
-            var absoluteRoot = Path.GetFullPath(rootPath);
-            if (!inspector.IsWithinAllowedDirectory(absoluteRoot))
-            {
-                return CreateToolError("The provided path is not within any allowed directory.");
-            }
-
-            sessionRoot = absoluteRoot;
-            inspector.LoadProjects(absoluteRoot);
-            return new { isError = false, content = Array.Empty<object>() };
-        }
-
-        if (sessionRoot is null)
-        {
-            return CreateToolError("Root not set. Call set_root before using tools.");
-        }
-
-        if (string.Equals(toolName, "roslyn_syntax_summary", StringComparison.Ordinal))
-        {
-            if (!TryGetStringProperty(request, out var path, "params", "arguments", "path") || string.IsNullOrWhiteSpace(path))
-            {
-                return CreateToolError("Missing required argument: path");
-            }
-
-            if (!inspector.TrySummarize(sessionRoot, path, out var summary, out var error))
-            {
-                return CreateToolError(error ?? "Unknown Roslyn analysis error.");
-            }
-
-            return new
-            {
-                isError = false,
-                structuredContent = summary,
-                content = new[]
-                {
-                    new
-                    {
-                        type = "text",
-                        text = JsonSerializer.Serialize(summary, jsonOptions)
-                    }
-                }
-            };
-        }
-
-        if (string.Equals(toolName, "roslyn_complexity_report", StringComparison.Ordinal))
-        {
-            if (!TryGetStringProperty(request, out var directory, "params", "arguments", "directory") || string.IsNullOrWhiteSpace(directory))
-            {
-                return CreateToolError("Missing required argument: directory");
-            }
-
-            var topN = 20;
-            if (request.TryGetProperty("params", out var p) &&
-                p.TryGetProperty("arguments", out var args) &&
-                args.TryGetProperty("top_n", out var topNElement) &&
-                topNElement.ValueKind == JsonValueKind.Number &&
-                topNElement.TryGetInt32(out var topNParsed) &&
-                topNParsed > 0)
-            {
-                topN = topNParsed;
-            }
-
-            if (!inspector.TryAnalyzeComplexity(sessionRoot, directory, topN, out var results, out var error))
-            {
-                return CreateToolError(error ?? "Unknown complexity analysis error.");
-            }
-
-            return new
-            {
-                isError = false,
-                structuredContent = new { results },
-                content = new[]
-                {
-                    new
-                    {
-                        type = "text",
-                        text = JsonSerializer.Serialize(new { results }, jsonOptions)
-                    }
-                }
-            };
-        }
-
-        if (string.Equals(toolName, "find_symbol", StringComparison.Ordinal))
-        {
-            if (!TryGetStringProperty(request, out var name, "params", "arguments", "name") || string.IsNullOrWhiteSpace(name))
-            {
-                return CreateToolError("Missing required argument: name");
-            }
-
-            if (!TryGetStringProperty(request, out var directory, "params", "arguments", "directory") || string.IsNullOrWhiteSpace(directory))
-            {
-                return CreateToolError("Missing required argument: directory");
-            }
-
-            if (!inspector.TryFindSymbol(sessionRoot, name, directory, out var matches, out var error))
-            {
-                return CreateToolError(error ?? "Unknown symbol search error.");
-            }
-
-            return new
-            {
-                isError = false,
-                structuredContent = new { matches },
-                content = new[]
-                {
-                    new
-                    {
-                        type = "text",
-                        text = JsonSerializer.Serialize(new { matches }, jsonOptions)
-                    }
-                }
-            };
-        }
-
-        if (string.Equals(toolName, "get_document_symbols", StringComparison.Ordinal))
-        {
-            if (!TryGetStringProperty(request, out var path, "params", "arguments", "path") || string.IsNullOrWhiteSpace(path))
-            {
-                return CreateToolError("Missing required argument: path");
-            }
-
-            if (!inspector.TryGetDocumentSymbols(sessionRoot, path, out var symbols, out var error))
-            {
-                return CreateToolError(error ?? "Unknown document symbols error.");
-            }
-
-            return new
-            {
-                isError = false,
-                structuredContent = new { symbols },
-                content = new[]
-                {
-                    new
-                    {
-                        type = "text",
-                        text = JsonSerializer.Serialize(new { symbols }, jsonOptions)
-                    }
-                }
-            };
-        }
-
-        if (string.Equals(toolName, "get_project_for_file", StringComparison.Ordinal))
-        {
-            if (!TryGetStringProperty(request, out var path, "params", "arguments", "path") || string.IsNullOrWhiteSpace(path))
-            {
-                return CreateToolError("Missing required argument: path");
-            }
-
-            if (!inspector.TryGetProjectForFile(sessionRoot, path, out var projects, out var error))
-            {
-                return CreateToolError(error ?? "Unknown get_project_for_file error.");
-            }
-
-            return new
-            {
-                isError = false,
-                structuredContent = new { projects },
-                content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { projects }, jsonOptions) } }
-            };
-        }
-
-        if (string.Equals(toolName, "get_method_body", StringComparison.Ordinal))
-        {
-            if (!TryGetStringProperty(request, out var name, "params", "arguments", "name") || string.IsNullOrWhiteSpace(name))
-                return CreateToolError("Missing required argument: name");
-            TryGetStringProperty(request, out var mbPath, "params", "arguments", "path");
-            TryGetStringProperty(request, out var mbDir, "params", "arguments", "directory");
-            var directory = string.IsNullOrWhiteSpace(mbDir) ? "." : mbDir;
-            if (!inspector.TryGetMethodBody(sessionRoot, name, mbPath, directory, out var methods, out var error))
-                return CreateToolError(error ?? "Unknown get_method_body error.");
-            return new { isError = false, structuredContent = new { methods },
-                content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { methods }, jsonOptions) } } };
-        }
-
-        if (string.Equals(toolName, "find_references", StringComparison.Ordinal))
-        {
-            if (!TryGetStringProperty(request, out var name, "params", "arguments", "name") || string.IsNullOrWhiteSpace(name))
-            {
-                return CreateToolError("Missing required argument: name");
-            }
-
-            TryGetStringProperty(request, out var project, "params", "arguments", "project");
-
-            if (!inspector.TryFindReferences(sessionRoot, name, project, out var refs, out var error))
-            {
-                return CreateToolError(error ?? "Unknown find_references error.");
-            }
-
-            return new
-            {
-                isError = false,
-                structuredContent = new { references = refs },
-                content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { references = refs }, jsonOptions) } }
-            };
-        }
-
-        if (string.Equals(toolName, "get_symbol_definition", StringComparison.Ordinal))
-        {
-            if (!TryGetStringProperty(request, out var path, "params", "arguments", "path") || string.IsNullOrWhiteSpace(path))
-            {
-                return CreateToolError("Missing required argument: path");
-            }
-
-            var line = 0;
-            if (request.TryGetProperty("params", out var p2) &&
-                p2.TryGetProperty("arguments", out var args2) &&
-                args2.TryGetProperty("line", out var lineEl) &&
-                lineEl.ValueKind == JsonValueKind.Number &&
-                lineEl.TryGetInt32(out var parsedLine))
-            {
-                line = parsedLine;
-            }
-
-            if (line <= 0)
-            {
-                return CreateToolError("Missing or invalid required argument: line");
-            }
-
-            TryGetStringProperty(request, out var project, "params", "arguments", "project");
-
-            if (!inspector.TryGetSymbolDefinition(sessionRoot, path, line, project, out var definition, out var error))
-            {
-                return CreateToolError(error ?? "Unknown get_symbol_definition error.");
-            }
-
-            return new
-            {
-                isError = false,
-                structuredContent = definition,
-                content = new[] { new { type = "text", text = JsonSerializer.Serialize(definition, jsonOptions) } }
-            };
-        }
-
-        if (string.Equals(toolName, "get_semantic_diagnostics", StringComparison.Ordinal))
-        {
-            TryGetStringProperty(request, out var path, "params", "arguments", "path");
-            TryGetStringProperty(request, out var project, "params", "arguments", "project");
-
-            if (!inspector.TryGetSemanticDiagnostics(sessionRoot, path, project, out var diagnostics, out var error))
-            {
-                return CreateToolError(error ?? "Unknown get_semantic_diagnostics error.");
-            }
-
-            return new
-            {
-                isError = false,
-                structuredContent = new { diagnostics },
-                content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { diagnostics }, jsonOptions) } }
-            };
-        }
-
-        if (string.Equals(toolName, "get_namespace_for_file", StringComparison.Ordinal))
-        {
-            if (!TryGetStringProperty(request, out var path, "params", "arguments", "path") || string.IsNullOrWhiteSpace(path))
-            {
-                return CreateToolError("Missing required argument: path");
-            }
-
-            if (!inspector.TryGetNamespacesForFile(sessionRoot, path, out var namespaces, out var error))
-            {
-                return CreateToolError(error ?? "Unknown get_namespace_for_file error.");
-            }
-
-            return new
-            {
-                isError = false,
-                structuredContent = new { namespaces },
-                content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { namespaces }, jsonOptions) } }
-            };
-        }
-
-        if (string.Equals(toolName, "list_source_files", StringComparison.Ordinal))
-        {
-            TryGetStringProperty(request, out var project, "params", "arguments", "project");
-
-            if (!inspector.TryListSourceFiles(sessionRoot, project, out var files, out var error))
-            {
-                return CreateToolError(error ?? "Unknown list_source_files error.");
-            }
-
-            return new
-            {
-                isError = false,
-                structuredContent = new { files },
-                content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { files }, jsonOptions) } }
-            };
-        }
-
-        if (string.Equals(toolName, "get_members", StringComparison.Ordinal))
-        {
-            if (!TryGetStringProperty(request, out var name, "params", "arguments", "name") || string.IsNullOrWhiteSpace(name))
-            {
-                return CreateToolError("Missing required argument: name");
-            }
-
-            if (!TryGetStringProperty(request, out var directory, "params", "arguments", "directory") || string.IsNullOrWhiteSpace(directory))
-            {
-                return CreateToolError("Missing required argument: directory");
-            }
-
-            if (!inspector.TryGetMembers(sessionRoot, name, directory, out var members, out var error))
-            {
-                return CreateToolError(error ?? "Unknown get_members error.");
-            }
-
-            return new
-            {
-                isError = false,
-                structuredContent = new { members },
-                content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { members }, jsonOptions) } }
-            };
-        }
-
-        if (string.Equals(toolName, "get_interface_implementations", StringComparison.Ordinal))
-        {
-            if (!TryGetStringProperty(request, out var name, "params", "arguments", "name") || string.IsNullOrWhiteSpace(name))
-            {
-                return CreateToolError("Missing required argument: name");
-            }
-
-            if (!TryGetStringProperty(request, out var directory, "params", "arguments", "directory") || string.IsNullOrWhiteSpace(directory))
-            {
-                return CreateToolError("Missing required argument: directory");
-            }
-
-            if (!inspector.TryGetInterfaceImplementations(sessionRoot, name, directory, out var implementors, out var error))
-            {
-                return CreateToolError(error ?? "Unknown get_interface_implementations error.");
-            }
-
-            return new
-            {
-                isError = false,
-                structuredContent = new { implementors },
-                content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { implementors }, jsonOptions) } }
-            };
-        }
-
-        if (string.Equals(toolName, "get_lines", StringComparison.Ordinal))
-        {
-            if (!TryGetStringProperty(request, out var path, "params", "arguments", "path") || string.IsNullOrWhiteSpace(path))
-                return CreateToolError("Missing required argument: path");
-
-            if (!request.TryGetProperty("params", out var glP) ||
-                !glP.TryGetProperty("arguments", out var glArgs))
-                return CreateToolError("Missing required arguments: start_line, end_line");
-
-            if (!glArgs.TryGetProperty("start_line", out var slProp) ||
-                !glArgs.TryGetProperty("end_line", out var elProp))
-                return CreateToolError("Missing required arguments: start_line, end_line");
-
-            var startLine = slProp.ValueKind == JsonValueKind.Number
-                ? slProp.GetInt32()
-                : int.TryParse(slProp.GetString(), out var sl) ? sl : 0;
-            var endLine = elProp.ValueKind == JsonValueKind.Number
-                ? elProp.GetInt32()
-                : int.TryParse(elProp.GetString(), out var el) ? el : 0;
-
-            if (startLine <= 0 || endLine <= 0)
-                return CreateToolError("Arguments 'start_line' and 'end_line' must be positive integers.");
-
-            if (!inspector.TryGetLines(sessionRoot, path, startLine, endLine, out var text, out var error))
-                return CreateToolError(error ?? "Unknown get_lines error.");
-
-            return new { isError = false, structuredContent = new { text },
-                content = new[] { new { type = "text", text = text! } } };
-        }
-
-        if (string.Equals(toolName, "get_call_hierarchy", StringComparison.Ordinal))
-        {
-            if (!TryGetStringProperty(request, out var name, "params", "arguments", "name") || string.IsNullOrWhiteSpace(name))
-            {
-                return CreateToolError("Missing required argument: name");
-            }
-
-            if (!TryGetStringProperty(request, out var directory, "params", "arguments", "directory") || string.IsNullOrWhiteSpace(directory))
-            {
-                return CreateToolError("Missing required argument: directory");
-            }
-
-            TryGetStringProperty(request, out var directionArg, "params", "arguments", "direction");
-            var direction = string.IsNullOrWhiteSpace(directionArg) ? "down" : directionArg;
-
-            var maxDepth = 2;
-            if (request.TryGetProperty("params", out var chP) &&
-                chP.TryGetProperty("arguments", out var chArgs) &&
-                chArgs.TryGetProperty("max_depth", out var mdProp) &&
-                mdProp.ValueKind == JsonValueKind.Number)
-            {
-                maxDepth = Math.Clamp(mdProp.GetInt32(), 1, 5);
-            }
-
-            if (!inspector.TryGetCallHierarchy(sessionRoot, name, direction, maxDepth, directory, out var nodes, out var error))
-            {
-                return CreateToolError(error ?? "Unknown get_call_hierarchy error.");
-            }
-
-            return new
-            {
-                isError = false,
-                structuredContent = new { nodes },
-                content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { nodes }, jsonOptions) } }
-            };
-        }
-
+        if (_toolDispatch.TryGetValue(toolName!, out var handler))
+            return handler(request);
         return CreateToolError($"Unknown tool: {toolName}");
+    }
+
+    /// <summary>Returns a tool error when <see cref="sessionRoot"/> is not set; null otherwise.</summary>
+    private object? RequireSessionRoot() =>
+        sessionRoot is null ? CreateToolError("Root not set. Call set_root before using tools.") : null;
+
+    /// <summary>Extracts the params.arguments element from a tool call request.</summary>
+    private static bool TryGetArgsElement(JsonElement request, out JsonElement args)
+    {
+        if (request.TryGetProperty("params", out var p) && p.TryGetProperty("arguments", out args))
+            return true;
+        args = default;
+        return false;
+    }
+
+    /// <summary>
+    /// Reads an integer argument from an args element.
+    /// Accepts both Number JSON values and string-encoded integers.
+    /// Returns <paramref name="defaultValue"/> when absent or unparseable.
+    /// </summary>
+    private static int TryGetIntArg(JsonElement args, string name, int defaultValue = 0)
+    {
+        if (!args.TryGetProperty(name, out var prop)) return defaultValue;
+        if (prop.ValueKind == JsonValueKind.Number && prop.TryGetInt32(out var n)) return n;
+        if (prop.ValueKind == JsonValueKind.String && int.TryParse(prop.GetString(), out var s)) return s;
+        return defaultValue;
+    }
+
+    private object HandleSetRoot(JsonElement request)
+    {
+        if (!TryGetStringProperty(request, out var rootPath, "params", "arguments", "path") || string.IsNullOrWhiteSpace(rootPath))
+            return CreateToolError("Missing required argument: path");
+        var absoluteRoot = Path.GetFullPath(rootPath);
+        if (!inspector.IsWithinAllowedDirectory(absoluteRoot))
+            return CreateToolError("The provided path is not within any allowed directory.");
+        sessionRoot = absoluteRoot;
+        inspector.LoadProjects(absoluteRoot);
+        return new { isError = false, content = Array.Empty<object>() };
+    }
+
+    private object HandleRoslynSyntaxSummary(JsonElement request)
+    {
+        if (RequireSessionRoot() is { } err) return err;
+        if (!TryGetStringProperty(request, out var path, "params", "arguments", "path") || string.IsNullOrWhiteSpace(path))
+            return CreateToolError("Missing required argument: path");
+        if (!inspector.TrySummarize(sessionRoot!, path, out var summary, out var error))
+            return CreateToolError(error ?? "Unknown Roslyn analysis error.");
+        return new { isError = false, structuredContent = summary,
+            content = new[] { new { type = "text", text = JsonSerializer.Serialize(summary, jsonOptions) } } };
+    }
+
+    private object HandleRoslynComplexityReport(JsonElement request)
+    {
+        if (RequireSessionRoot() is { } err) return err;
+        if (!TryGetStringProperty(request, out var directory, "params", "arguments", "directory") || string.IsNullOrWhiteSpace(directory))
+            return CreateToolError("Missing required argument: directory");
+        TryGetArgsElement(request, out var args);
+        var rawTopN = TryGetIntArg(args, "top_n");
+        var topN = rawTopN > 0 ? rawTopN : 20;
+        if (!inspector.TryAnalyzeComplexity(sessionRoot!, directory, topN, out var results, out var error))
+            return CreateToolError(error ?? "Unknown complexity analysis error.");
+        return new { isError = false, structuredContent = new { results },
+            content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { results }, jsonOptions) } } };
+    }
+
+    private object HandleFindSymbol(JsonElement request)
+    {
+        if (RequireSessionRoot() is { } err) return err;
+        if (!TryGetStringProperty(request, out var name, "params", "arguments", "name") || string.IsNullOrWhiteSpace(name))
+            return CreateToolError("Missing required argument: name");
+        if (!TryGetStringProperty(request, out var directory, "params", "arguments", "directory") || string.IsNullOrWhiteSpace(directory))
+            return CreateToolError("Missing required argument: directory");
+        if (!inspector.TryFindSymbol(sessionRoot!, name, directory, out var matches, out var error))
+            return CreateToolError(error ?? "Unknown symbol search error.");
+        return new { isError = false, structuredContent = new { matches },
+            content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { matches }, jsonOptions) } } };
+    }
+
+    private object HandleGetDocumentSymbols(JsonElement request)
+    {
+        if (RequireSessionRoot() is { } err) return err;
+        if (!TryGetStringProperty(request, out var path, "params", "arguments", "path") || string.IsNullOrWhiteSpace(path))
+            return CreateToolError("Missing required argument: path");
+        if (!inspector.TryGetDocumentSymbols(sessionRoot!, path, out var symbols, out var error))
+            return CreateToolError(error ?? "Unknown document symbols error.");
+        return new { isError = false, structuredContent = new { symbols },
+            content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { symbols }, jsonOptions) } } };
+    }
+
+    private object HandleGetProjectForFile(JsonElement request)
+    {
+        if (RequireSessionRoot() is { } err) return err;
+        if (!TryGetStringProperty(request, out var path, "params", "arguments", "path") || string.IsNullOrWhiteSpace(path))
+            return CreateToolError("Missing required argument: path");
+        if (!inspector.TryGetProjectForFile(sessionRoot!, path, out var projects, out var error))
+            return CreateToolError(error ?? "Unknown get_project_for_file error.");
+        return new { isError = false, structuredContent = new { projects },
+            content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { projects }, jsonOptions) } } };
+    }
+
+    private object HandleGetMethodBody(JsonElement request)
+    {
+        if (RequireSessionRoot() is { } err) return err;
+        if (!TryGetStringProperty(request, out var name, "params", "arguments", "name") || string.IsNullOrWhiteSpace(name))
+            return CreateToolError("Missing required argument: name");
+        TryGetStringProperty(request, out var mbPath, "params", "arguments", "path");
+        TryGetStringProperty(request, out var mbDir, "params", "arguments", "directory");
+        var directory = string.IsNullOrWhiteSpace(mbDir) ? "." : mbDir;
+        if (!inspector.TryGetMethodBody(sessionRoot!, name, mbPath, directory, out var methods, out var error))
+            return CreateToolError(error ?? "Unknown get_method_body error.");
+        return new { isError = false, structuredContent = new { methods },
+            content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { methods }, jsonOptions) } } };
+    }
+
+    private object HandleFindReferences(JsonElement request)
+    {
+        if (RequireSessionRoot() is { } err) return err;
+        if (!TryGetStringProperty(request, out var name, "params", "arguments", "name") || string.IsNullOrWhiteSpace(name))
+            return CreateToolError("Missing required argument: name");
+        TryGetStringProperty(request, out var project, "params", "arguments", "project");
+        if (!inspector.TryFindReferences(sessionRoot!, name, project, out var refs, out var error))
+            return CreateToolError(error ?? "Unknown find_references error.");
+        return new { isError = false, structuredContent = new { references = refs },
+            content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { references = refs }, jsonOptions) } } };
+    }
+
+    private object HandleGetSymbolDefinition(JsonElement request)
+    {
+        if (RequireSessionRoot() is { } err) return err;
+        if (!TryGetStringProperty(request, out var path, "params", "arguments", "path") || string.IsNullOrWhiteSpace(path))
+            return CreateToolError("Missing required argument: path");
+        TryGetArgsElement(request, out var args);
+        var line = TryGetIntArg(args, "line");
+        if (line <= 0)
+            return CreateToolError("Missing or invalid required argument: line");
+        TryGetStringProperty(request, out var project, "params", "arguments", "project");
+        if (!inspector.TryGetSymbolDefinition(sessionRoot!, path, line, project, out var definition, out var error))
+            return CreateToolError(error ?? "Unknown get_symbol_definition error.");
+        return new { isError = false, structuredContent = definition,
+            content = new[] { new { type = "text", text = JsonSerializer.Serialize(definition, jsonOptions) } } };
+    }
+
+    private object HandleGetSemanticDiagnostics(JsonElement request)
+    {
+        if (RequireSessionRoot() is { } err) return err;
+        TryGetStringProperty(request, out var path, "params", "arguments", "path");
+        TryGetStringProperty(request, out var project, "params", "arguments", "project");
+        if (!inspector.TryGetSemanticDiagnostics(sessionRoot!, path, project, out var diagnostics, out var error))
+            return CreateToolError(error ?? "Unknown get_semantic_diagnostics error.");
+        return new { isError = false, structuredContent = new { diagnostics },
+            content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { diagnostics }, jsonOptions) } } };
+    }
+
+    private object HandleGetNamespaceForFile(JsonElement request)
+    {
+        if (RequireSessionRoot() is { } err) return err;
+        if (!TryGetStringProperty(request, out var path, "params", "arguments", "path") || string.IsNullOrWhiteSpace(path))
+            return CreateToolError("Missing required argument: path");
+        if (!inspector.TryGetNamespacesForFile(sessionRoot!, path, out var namespaces, out var error))
+            return CreateToolError(error ?? "Unknown get_namespace_for_file error.");
+        return new { isError = false, structuredContent = new { namespaces },
+            content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { namespaces }, jsonOptions) } } };
+    }
+
+    private object HandleListSourceFiles(JsonElement request)
+    {
+        if (RequireSessionRoot() is { } err) return err;
+        TryGetStringProperty(request, out var project, "params", "arguments", "project");
+        if (!inspector.TryListSourceFiles(sessionRoot!, project, out var files, out var error))
+            return CreateToolError(error ?? "Unknown list_source_files error.");
+        return new { isError = false, structuredContent = new { files },
+            content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { files }, jsonOptions) } } };
+    }
+
+    private object HandleGetMembers(JsonElement request)
+    {
+        if (RequireSessionRoot() is { } err) return err;
+        if (!TryGetStringProperty(request, out var name, "params", "arguments", "name") || string.IsNullOrWhiteSpace(name))
+            return CreateToolError("Missing required argument: name");
+        if (!TryGetStringProperty(request, out var directory, "params", "arguments", "directory") || string.IsNullOrWhiteSpace(directory))
+            return CreateToolError("Missing required argument: directory");
+        if (!inspector.TryGetMembers(sessionRoot!, name, directory, out var members, out var error))
+            return CreateToolError(error ?? "Unknown get_members error.");
+        return new { isError = false, structuredContent = new { members },
+            content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { members }, jsonOptions) } } };
+    }
+
+    private object HandleGetInterfaceImplementations(JsonElement request)
+    {
+        if (RequireSessionRoot() is { } err) return err;
+        if (!TryGetStringProperty(request, out var name, "params", "arguments", "name") || string.IsNullOrWhiteSpace(name))
+            return CreateToolError("Missing required argument: name");
+        if (!TryGetStringProperty(request, out var directory, "params", "arguments", "directory") || string.IsNullOrWhiteSpace(directory))
+            return CreateToolError("Missing required argument: directory");
+        if (!inspector.TryGetInterfaceImplementations(sessionRoot!, name, directory, out var implementors, out var error))
+            return CreateToolError(error ?? "Unknown get_interface_implementations error.");
+        return new { isError = false, structuredContent = new { implementors },
+            content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { implementors }, jsonOptions) } } };
+    }
+
+    private object HandleGetLines(JsonElement request)
+    {
+        if (RequireSessionRoot() is { } err) return err;
+        if (!TryGetStringProperty(request, out var path, "params", "arguments", "path") || string.IsNullOrWhiteSpace(path))
+            return CreateToolError("Missing required argument: path");
+        if (!TryGetArgsElement(request, out var args) ||
+            !args.TryGetProperty("start_line", out _) || !args.TryGetProperty("end_line", out _))
+            return CreateToolError("Missing required arguments: start_line, end_line");
+        var startLine = TryGetIntArg(args, "start_line");
+        var endLine = TryGetIntArg(args, "end_line");
+        if (startLine <= 0 || endLine <= 0)
+            return CreateToolError("Arguments 'start_line' and 'end_line' must be positive integers.");
+        if (!inspector.TryGetLines(sessionRoot!, path, startLine, endLine, out var text, out var error))
+            return CreateToolError(error ?? "Unknown get_lines error.");
+        return new { isError = false, structuredContent = new { text },
+            content = new[] { new { type = "text", text = text! } } };
+    }
+
+    private object HandleGetCallHierarchy(JsonElement request)
+    {
+        if (RequireSessionRoot() is { } err) return err;
+        if (!TryGetStringProperty(request, out var name, "params", "arguments", "name") || string.IsNullOrWhiteSpace(name))
+            return CreateToolError("Missing required argument: name");
+        if (!TryGetStringProperty(request, out var directory, "params", "arguments", "directory") || string.IsNullOrWhiteSpace(directory))
+            return CreateToolError("Missing required argument: directory");
+        TryGetStringProperty(request, out var directionArg, "params", "arguments", "direction");
+        var direction = string.IsNullOrWhiteSpace(directionArg) ? "down" : directionArg;
+        TryGetArgsElement(request, out var args);
+        var rawDepth = TryGetIntArg(args, "max_depth");
+        var maxDepth = rawDepth > 0 ? Math.Clamp(rawDepth, 1, 5) : 2;
+        if (!inspector.TryGetCallHierarchy(sessionRoot!, name, direction, maxDepth, directory, out var nodes, out var error))
+            return CreateToolError(error ?? "Unknown get_call_hierarchy error.");
+        return new { isError = false, structuredContent = new { nodes },
+            content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { nodes }, jsonOptions) } } };
     }
 
     private static JsonElement? GetId(JsonElement request)
