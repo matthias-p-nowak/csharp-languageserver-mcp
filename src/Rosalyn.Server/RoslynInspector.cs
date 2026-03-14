@@ -52,6 +52,16 @@ internal sealed class RoslynInspector
 
             var objPath = Path.Combine(projectDir, "obj") + Path.DirectorySeparatorChar;
             var syntaxTrees = new List<SyntaxTree>();
+
+            // Include GlobalUsings.g.cs from obj/ to replicate ImplicitUsings behaviour.
+            var objDir = objPath.TrimEnd(Path.DirectorySeparatorChar);
+            foreach (var globalUsings in Directory.Exists(objDir)
+                ? Directory.EnumerateFiles(objDir, "*.GlobalUsings.g.cs", SearchOption.AllDirectories)
+                : [])
+            {
+                syntaxTrees.Add(CSharpSyntaxTree.ParseText(File.ReadAllText(globalUsings), path: globalUsings));
+            }
+
             foreach (var cs in Directory.EnumerateFiles(projectDir, "*.cs", SearchOption.AllDirectories))
             {
                 if (cs.StartsWith(objPath, StringComparison.OrdinalIgnoreCase))
