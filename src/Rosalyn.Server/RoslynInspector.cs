@@ -1743,6 +1743,88 @@ internal sealed class RoslynInspector
     }
 
     /// <summary>
+    /// Returns all using directives declared in a single repository-relative C# file.
+    /// </summary>
+    /// <param name="repositoryRoot">Absolute session root path.</param>
+    /// <param name="relativePath">Repository-relative path to a .cs file.</param>
+    /// <param name="usings">Using directive names in source order on success.</param>
+    /// <param name="error">Error details on failure.</param>
+    /// <returns><c>true</c> on success; <c>false</c> with <paramref name="error"/> set on failure.</returns>
+    public bool TryGetUsings(
+        string repositoryRoot,
+        string relativePath,
+        out IReadOnlyList<string>? usings,
+        out string? error)
+    {
+        usings = null;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(relativePath))
+        {
+            error = "Argument 'path' is required.";
+            return false;
+        }
+
+        if (!relativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+        {
+            error = "Only .cs files are supported.";
+            return false;
+        }
+
+        var absolutePath = Path.GetFullPath(Path.Combine(repositoryRoot, relativePath));
+
+        if (!IsWithinDirectory(absolutePath, repositoryRoot))
+        {
+            error = "The provided path must be inside the repository root.";
+            return false;
+        }
+
+        if (!IsWithinAllowedDirectory(absolutePath))
+        {
+            error = "The provided path is not within any allowed directory.";
+            return false;
+        }
+
+        if (!File.Exists(absolutePath))
+        {
+            error = $"File not found: {relativePath}";
+            return false;
+        }
+
+        var code = File.ReadAllText(absolutePath);
+        var tree = CSharpSyntaxTree.ParseText(code, path: absolutePath);
+        var root = (CompilationUnitSyntax)tree.GetRoot();
+
+        usings = root.Usings
+            .Select(u => u.Name?.ToString() ?? string.Empty)
+            .Where(n => !string.IsNullOrEmpty(n))
+            .ToList();
+
+        return true;
+    }
+
+    /// <summary>
+    /// Returns the known project keys (relative .csproj paths) for the session.
+    /// Returns an error when <see cref="LoadProjects"/> has not been called.
+    /// </summary>
+    /// <param name="projects">Project keys on success.</param>
+    /// <param name="error">Error details on failure.</param>
+    /// <returns><c>true</c> on success; <c>false</c> with <paramref name="error"/> set on failure.</returns>
+    public bool TryListProjects(out IReadOnlyList<string>? projects, out string? error)
+    {
+        if (projectCompilations is null)
+        {
+            projects = null;
+            error = "Projects not loaded. Call set_root first.";
+            return false;
+        }
+
+        projects = KnownProjects!;
+        error = null;
+        return true;
+    }
+
+    /// <summary>
     /// Returns all test methods (decorated with [Fact], [Test], [Theory], or [TestMethod])
     /// across all .cs files under <paramref name="relativeDirectory"/>.
     /// </summary>

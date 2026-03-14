@@ -57,6 +57,8 @@ internal sealed class McpServer
             ["get_call_hierarchy"]            = HandleGetCallHierarchy,
             ["find_test_methods"]             = HandleFindTestMethods,
             ["get_xml_doc"]                   = HandleGetXmlDoc,
+            ["get_usings"]                    = HandleGetUsings,
+            ["list_projects"]                 = HandleListProjects,
         };
     }
 
@@ -508,6 +510,31 @@ internal sealed class McpServer
                                 },
                                 required = new[] { "name", "directory" }
                             }
+                        },
+                        new
+                        {
+                            name = "get_usings",
+                            description = "Return all using directives declared in a .cs file, in source order.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    path = new { type = "string", description = "Repository-relative path to a .cs file." }
+                                },
+                                required = new[] { "path" }
+                            }
+                        },
+                        new
+                        {
+                            name = "list_projects",
+                            description = "Return all known project keys (relative .csproj paths) loaded for this session. Requires set_root to have been called.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new { },
+                                required = Array.Empty<string>()
+                            }
                         }
                     }
                 });
@@ -878,6 +905,26 @@ internal sealed class McpServer
             return CreateToolError(error ?? "Unknown get_xml_doc error.");
         return new { isError = false, structuredContent = new { results },
             content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { results }, jsonOptions) } } };
+    }
+
+    private object HandleGetUsings(JsonElement request)
+    {
+        if (RequireSessionRoot() is { } err) return err;
+        if (!TryGetStringProperty(request, out var path, "params", "arguments", "path") || string.IsNullOrWhiteSpace(path))
+            return CreateToolError("Missing required argument: path");
+        if (!inspector.TryGetUsings(sessionRoot!, path, out var usings, out var error))
+            return CreateToolError(error ?? "Unknown get_usings error.");
+        return new { isError = false, structuredContent = new { usings },
+            content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { usings }, jsonOptions) } } };
+    }
+
+    private object HandleListProjects(JsonElement request)
+    {
+        if (RequireSessionRoot() is { } err) return err;
+        if (!inspector.TryListProjects(out var projects, out var error))
+            return CreateToolError(error ?? "Unknown list_projects error.");
+        return new { isError = false, structuredContent = new { projects },
+            content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { projects }, jsonOptions) } } };
     }
 
     private static JsonElement? GetId(JsonElement request)

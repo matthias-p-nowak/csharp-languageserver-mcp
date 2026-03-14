@@ -1068,6 +1068,79 @@ public class C {
         }
     }
 
+    /// <summary>
+    /// Verifies that TryGetUsings returns all using directives in a file.
+    /// </summary>
+    [Fact]
+    public void TryGetUsings_ReturnsAllUsings()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "Sample.cs"),
+                "using System;\nusing System.Collections.Generic;\npublic class C {}");
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryGetUsings(repositoryRoot, "Sample.cs", out var usings, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(usings);
+            Assert.Equal(2, usings!.Count);
+            Assert.Contains("System", usings);
+            Assert.Contains("System.Collections.Generic", usings);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that TryGetUsings returns an empty list when no usings are declared.
+    /// </summary>
+    [Fact]
+    public void TryGetUsings_EmptyWhenNoUsings()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "Sample.cs"), "public class C {}");
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryGetUsings(repositoryRoot, "Sample.cs", out var usings, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(usings);
+            Assert.Empty(usings!);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that TryListProjects returns an error when LoadProjects has not been called.
+    /// </summary>
+    [Fact]
+    public void TryListProjects_FailsWhenNotLoaded()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryListProjects(out var projects, out var error);
+
+            Assert.False(success);
+            Assert.Null(projects);
+            Assert.NotNull(error);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
     private static string CreateTempRoot()
     {
         var path = Path.Combine(Path.GetTempPath(), "rosalyn-tests-" + Guid.NewGuid().ToString("N"));
