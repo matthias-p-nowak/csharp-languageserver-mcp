@@ -350,6 +350,22 @@ internal sealed class McpServer
                                 },
                                 required = Array.Empty<string>()
                             }
+                        },
+                        new
+                        {
+                            name = "get_method_body",
+                            description = "Return the full source text of a named method with its file path and start/end line numbers. Syntax-only. Returns all overloads or same-named methods across files.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    name = new { type = "string", description = "Exact method name to find (case-sensitive)." },
+                                    path = new { type = "string", description = "Repository-relative .cs file to restrict search to. Optional." },
+                                    directory = new { type = "string", description = "Repository-relative directory to scan. Ignored when 'path' is provided. Defaults to '.'." }
+                                },
+                                required = new[] { "name" }
+                            }
                         }
                     }
                 });
@@ -624,6 +640,19 @@ internal sealed class McpServer
                 structuredContent = new { projects },
                 content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { projects }, jsonOptions) } }
             };
+        }
+
+        if (string.Equals(toolName, "get_method_body", StringComparison.Ordinal))
+        {
+            if (!TryGetStringProperty(request, out var name, "params", "arguments", "name") || string.IsNullOrWhiteSpace(name))
+                return CreateToolError("Missing required argument: name");
+            TryGetStringProperty(request, out var mbPath, "params", "arguments", "path");
+            TryGetStringProperty(request, out var mbDir, "params", "arguments", "directory");
+            var directory = string.IsNullOrWhiteSpace(mbDir) ? "." : mbDir;
+            if (!inspector.TryGetMethodBody(sessionRoot, name, mbPath, directory, out var methods, out var error))
+                return CreateToolError(error ?? "Unknown get_method_body error.");
+            return new { isError = false, structuredContent = new { methods },
+                content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { methods }, jsonOptions) } } };
         }
 
         if (string.Equals(toolName, "find_references", StringComparison.Ordinal))

@@ -17,6 +17,7 @@ Rosalyn is an MCP server built with C#/.NET that provides codebase insight using
 - DR-012 (get_symbol_definition): Expose a `get_symbol_definition` MCP tool that, given a file and line, returns the definition site (file + line) of the symbol at that position. Requires semantic compilation (DR-010). Accepts optional `project` argument per RQ-008.
 - DR-013 (get_semantic_diagnostics): Expose a `get_semantic_diagnostics` MCP tool that returns compiler errors and warnings for a `.cs` file or whole project. Requires semantic compilation (DR-010). Accepts optional `project` argument per RQ-008.
 - DR-014 (get_project_for_file): Expose a `get_project_for_file` MCP tool that, given a repository-relative `.cs` file path, returns the relative `.csproj` path(s) whose source tree contains that file. Syntax-only — uses the cached project source file lists from DR-010. Returns all matching projects if a file appears in multiple.
+- DR-015 (get_method_body): Expose a `get_method_body` MCP tool that, given a method name and optional scoping arguments (`path` for a single file or `directory` for a subtree), returns the full source text of each matching method with its file path and start/end line numbers. Syntax-only. Multiple matches are returned when overloads or same-named methods exist across files.
 
 ## Server startup
 - CLI args are a list of allowed absolute directory paths; no `--root` arg.
@@ -41,6 +42,7 @@ Each tool has its own spec in `docs/tools/<tool-name>.md`. Load only the relevan
 | `get_symbol_definition` | [docs/tools/get_symbol_definition.md](tools/get_symbol_definition.md) |
 | `get_semantic_diagnostics` | [docs/tools/get_semantic_diagnostics.md](tools/get_semantic_diagnostics.md) |
 | `get_project_for_file` | [docs/tools/get_project_for_file.md](tools/get_project_for_file.md) |
+| `get_method_body` | [docs/tools/get_method_body.md](tools/get_method_body.md) |
 
 ## MCP transport behavior
 See [docs/handshake.md](handshake.md) for the full transport and handshake spec.

@@ -355,6 +355,104 @@ public sealed class RoslynInspectorTests
         }
     }
 
+    /// <summary>
+    /// Verifies that TryGetMethodBody returns the source text of a named method.
+    /// </summary>
+    [Fact]
+    public void TryGetMethodBody_ReturnsMethodSource()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "Sample.cs"), """
+                namespace Demo;
+                public class C
+                {
+                    public void MyMethod()
+                    {
+                        var x = 1;
+                    }
+                    public void Other() { }
+                }
+                """);
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryGetMethodBody(repositoryRoot, "MyMethod", null, ".", out var results, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(results);
+            Assert.Single(results!);
+            Assert.Equal("Sample.cs", results![0].File);
+            Assert.Contains("MyMethod", results[0].Text);
+            Assert.True(results[0].StartLine > 0);
+            Assert.True(results[0].EndLine >= results[0].StartLine);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that TryGetMethodBody returns all overloads when multiple same-named methods exist.
+    /// </summary>
+    [Fact]
+    public void TryGetMethodBody_ReturnsAllOverloads()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "Sample.cs"), """
+                namespace Demo;
+                public class C
+                {
+                    public void Process() { }
+                    public void Process(int x) { }
+                }
+                """);
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryGetMethodBody(repositoryRoot, "Process", null, ".", out var results, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(results);
+            Assert.Equal(2, results!.Count);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that TryGetMethodBody scopes to a single file when path is provided.
+    /// </summary>
+    [Fact]
+    public void TryGetMethodBody_ScopesToSingleFile()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "A.cs"), "namespace Demo; public class A { public void Compute() { } }");
+            File.WriteAllText(Path.Combine(repositoryRoot, "B.cs"), "namespace Demo; public class B { public void Compute() { } }");
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryGetMethodBody(repositoryRoot, "Compute", "A.cs", ".", out var results, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(results);
+            Assert.Single(results!);
+            Assert.Contains("A.cs", results![0].File);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
     private static string CreateTempRoot()
     {
         var path = Path.Combine(Path.GetTempPath(), "rosalyn-tests-" + Guid.NewGuid().ToString("N"));

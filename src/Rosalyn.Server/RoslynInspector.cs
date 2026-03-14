@@ -588,6 +588,121 @@ internal sealed class RoslynInspector
     }
 
     /// <summary>
+    /// Returns the full source text of every method whose name matches
+    /// <paramref name="methodName"/>. Scoped to a single file when
+    /// <paramref name="relativePath"/> is provided, otherwise to the
+    /// <paramref name="relativeDirectory"/> subtree.
+    /// </summary>
+    /// <param name="repositoryRoot">Absolute session root path.</param>
+    /// <param name="methodName">Exact method name to find (case-sensitive).</param>
+    /// <param name="relativePath">Optional repository-relative path to a single .cs file.</param>
+    /// <param name="relativeDirectory">Repository-relative directory to scan; used only when <paramref name="relativePath"/> is null. Defaults to <c>"."</c>.</param>
+    /// <param name="results">Method body results on success.</param>
+    /// <param name="error">Error details on failure.</param>
+    /// <returns><c>true</c> on success; otherwise <c>false</c>.</returns>
+    public bool TryGetMethodBody(
+        string repositoryRoot,
+        string methodName,
+        string? relativePath,
+        string relativeDirectory,
+        out IReadOnlyList<MethodBodyResult>? results,
+        out string? error)
+    {
+        results = null;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(methodName))
+        {
+            error = "Argument 'name' is required.";
+            return false;
+        }
+
+        IEnumerable<string> files;
+
+        if (!string.IsNullOrWhiteSpace(relativePath))
+        {
+            if (!relativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+            {
+                error = "Only .cs files are supported.";
+                return false;
+            }
+
+            var absoluteFilePath = Path.GetFullPath(Path.Combine(repositoryRoot, relativePath));
+
+            if (!IsWithinDirectory(absoluteFilePath, repositoryRoot))
+            {
+                error = "The provided path must be inside the repository root.";
+                return false;
+            }
+
+            if (!IsWithinAllowedDirectory(absoluteFilePath))
+            {
+                error = "The provided path is not within any allowed directory.";
+                return false;
+            }
+
+            if (!File.Exists(absoluteFilePath))
+            {
+                error = $"File not found: {relativePath}";
+                return false;
+            }
+
+            files = [absoluteFilePath];
+        }
+        else
+        {
+            var absoluteDir = Path.GetFullPath(Path.Combine(repositoryRoot, relativeDirectory));
+
+            if (!IsWithinDirectory(absoluteDir, repositoryRoot))
+            {
+                error = "The provided directory must be inside the repository root.";
+                return false;
+            }
+
+            if (!IsWithinAllowedDirectory(absoluteDir))
+            {
+                error = "The provided directory is not within any allowed directory.";
+                return false;
+            }
+
+            if (!Directory.Exists(absoluteDir))
+            {
+                error = $"Directory not found: {relativeDirectory}";
+                return false;
+            }
+
+            files = Directory.EnumerateFiles(absoluteDir, "*.cs", SearchOption.AllDirectories);
+        }
+
+        var matches = new List<MethodBodyResult>();
+
+        foreach (var filePath in files)
+        {
+            var source = File.ReadAllText(filePath);
+            var tree = CSharpSyntaxTree.ParseText(source, path: filePath);
+            var root = tree.GetCompilationUnitRoot();
+            var relativeFilePath = Path.GetRelativePath(repositoryRoot, filePath);
+
+            foreach (var method in root.DescendantNodes().OfType<MethodDeclarationSyntax>())
+            {
+                if (method.Identifier.Text != methodName)
+                {
+                    continue;
+                }
+
+                var startLine = tree.GetLineSpan(method.Span).StartLinePosition.Line + 1;
+                var endLine = tree.GetLineSpan(method.Span).EndLinePosition.Line + 1;
+                var text = method.ToFullString().TrimEnd();
+
+                matches.Add(new MethodBodyResult(relativeFilePath, startLine, endLine, text));
+            }
+        }
+
+        results = matches;
+        return true;
+    }
+
+    /// <summary>
     /// Resolves a <see cref="CSharpCompilation"/> given an optional relative .csproj hint.
     /// Returns false and sets <paramref name="error"/> when the project cannot be resolved.
     /// </summary>
