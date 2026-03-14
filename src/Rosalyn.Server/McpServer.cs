@@ -427,6 +427,22 @@ internal sealed class McpServer
                         },
                         new
                         {
+                            name = "get_lines",
+                            description = "Return a line range from any file without loading the whole content. Useful for reading a section of a large file.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    path = new { type = "string", description = "Repository-relative file path." },
+                                    start_line = new { type = "integer", description = "First line to return (1-based)." },
+                                    end_line = new { type = "integer", description = "Last line to return (1-based, inclusive)." }
+                                },
+                                required = new[] { "path", "start_line", "end_line" }
+                            }
+                        },
+                        new
+                        {
                             name = "get_call_hierarchy",
                             description = "Build a call hierarchy (callers or callees) for a named method across .cs files under a directory.",
                             inputSchema = new
@@ -892,6 +908,27 @@ internal sealed class McpServer
                 structuredContent = new { implementors },
                 content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { implementors }, jsonOptions) } }
             };
+        }
+
+        if (string.Equals(toolName, "get_lines", StringComparison.Ordinal))
+        {
+            if (!TryGetStringProperty(request, out var path, "params", "arguments", "path") || string.IsNullOrWhiteSpace(path))
+                return CreateToolError("Missing required argument: path");
+
+            if (!request.TryGetProperty("params", out var glP) ||
+                !glP.TryGetProperty("arguments", out var glArgs) ||
+                !glArgs.TryGetProperty("start_line", out var slProp) || slProp.ValueKind != JsonValueKind.Number ||
+                !glArgs.TryGetProperty("end_line", out var elProp) || elProp.ValueKind != JsonValueKind.Number)
+                return CreateToolError("Missing required arguments: start_line, end_line");
+
+            var startLine = slProp.GetInt32();
+            var endLine = elProp.GetInt32();
+
+            if (!inspector.TryGetLines(sessionRoot, path, startLine, endLine, out var text, out var error))
+                return CreateToolError(error ?? "Unknown get_lines error.");
+
+            return new { isError = false, structuredContent = new { text },
+                content = new[] { new { type = "text", text = text! } } };
         }
 
         if (string.Equals(toolName, "get_call_hierarchy", StringComparison.Ordinal))

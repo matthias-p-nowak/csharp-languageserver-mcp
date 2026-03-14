@@ -1670,6 +1670,78 @@ internal sealed class RoslynInspector
         return callers;
     }
 
+    /// <summary>
+    /// Returns the requested line range (1-based, inclusive) from a repository-relative file.
+    /// </summary>
+    /// <param name="repositoryRoot">Absolute session root path.</param>
+    /// <param name="relativePath">Repository-relative path to the file.</param>
+    /// <param name="startLine">First line to return (1-based).</param>
+    /// <param name="endLine">Last line to return (1-based, inclusive).</param>
+    /// <param name="text">The requested lines joined by newline on success.</param>
+    /// <param name="error">Error details on failure.</param>
+    /// <returns><c>true</c> on success; otherwise <c>false</c>.</returns>
+    public bool TryGetLines(
+        string repositoryRoot,
+        string relativePath,
+        int startLine,
+        int endLine,
+        out string? text,
+        out string? error)
+    {
+        text = null;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(relativePath))
+        {
+            error = "Argument 'path' is required.";
+            return false;
+        }
+
+        if (startLine < 1)
+        {
+            error = "Argument 'start_line' must be >= 1.";
+            return false;
+        }
+
+        if (endLine < startLine)
+        {
+            error = "Argument 'end_line' must be >= start_line.";
+            return false;
+        }
+
+        var absolutePath = Path.GetFullPath(Path.Combine(repositoryRoot, relativePath));
+
+        if (!IsWithinDirectory(absolutePath, repositoryRoot))
+        {
+            error = "The provided path must be inside the repository root.";
+            return false;
+        }
+
+        if (!IsWithinAllowedDirectory(absolutePath))
+        {
+            error = "The provided path is not within any allowed directory.";
+            return false;
+        }
+
+        if (!File.Exists(absolutePath))
+        {
+            error = $"File not found: {relativePath}";
+            return false;
+        }
+
+        var lines = File.ReadAllLines(absolutePath);
+
+        if (startLine > lines.Length)
+        {
+            error = $"start_line {startLine} exceeds file length ({lines.Length} lines).";
+            return false;
+        }
+
+        var clampedEnd = Math.Min(endLine, lines.Length);
+        text = string.Join("\n", lines[(startLine - 1)..clampedEnd]);
+        return true;
+    }
+
     private static bool IsWithinDirectory(string absolutePath, string directory)
     {
         var dirWithSeparator = directory.EndsWith(Path.DirectorySeparatorChar)

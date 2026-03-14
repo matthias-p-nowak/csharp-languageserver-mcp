@@ -22,6 +22,7 @@ Rosalyn is an MCP server built with C#/.NET that provides codebase insight using
 - DR-017 (list_source_files): Expose a `list_source_files` MCP tool that returns repository-relative paths for all C# source files. When projects are loaded (DR-010), returns files from the selected (or auto-selected) project, excluding `obj/` trees. Falls back to a full directory scan when no projects are loaded. Accepts optional `project` argument per RQ-008.
 - DR-018 (get_members): Expose a `get_members` MCP tool that, given a type name and directory, returns all members (fields, properties, methods, constructors, events) of that type across all `.cs` files under the directory, with file, line, kind, name, and signature. Syntax-only.
 - DR-019 (get_interface_implementations): Expose a `get_interface_implementations` MCP tool that, given an interface name and directory, returns all classes, records, and structs whose base list contains that interface name (matched by simple name). Syntax-only.
+- DR-021 (get_lines): Expose a `get_lines` MCP tool that, given a repository-relative file path, start line, and end line (1-based, inclusive), returns the requested line range as a string. No Roslyn required — pure file I/O. Useful for reading a section of a large file without fetching the whole content.
 - DR-020 (get_call_hierarchy): Expose a `get_call_hierarchy` MCP tool that, given a method name, direction ("up" for callers / "down" for callees), max depth (1–5, default 2), and directory, returns a tree of `CallHierarchyNode` records. Cycle detection prevents infinite recursion. Syntax-only.
 
 ## Server startup
@@ -53,6 +54,7 @@ Each tool has its own spec in `docs/tools/<tool-name>.md`. Load only the relevan
 | `get_members` | [docs/tools/get_members.md](tools/get_members.md) |
 | `get_interface_implementations` | [docs/tools/get_interface_implementations.md](tools/get_interface_implementations.md) |
 | `get_call_hierarchy` | [docs/tools/get_call_hierarchy.md](tools/get_call_hierarchy.md) |
+| `get_lines` | [docs/tools/get_lines.md](tools/get_lines.md) |
 
 ## MCP transport behavior
 See [docs/handshake.md](handshake.md) for the full transport and handshake spec.

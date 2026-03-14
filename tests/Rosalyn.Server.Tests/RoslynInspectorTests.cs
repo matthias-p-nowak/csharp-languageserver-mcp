@@ -833,6 +833,80 @@ public sealed class RoslynInspectorTests
         }
     }
 
+    // --- P-021: get_lines ---
+
+    /// <summary>
+    /// Verifies that TryGetLines returns the requested line range.
+    /// </summary>
+    [Fact]
+    public void TryGetLines_ReturnsRequestedRange()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllLines(Path.Combine(repositoryRoot, "Sample.cs"), ["line1", "line2", "line3", "line4", "line5"]);
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryGetLines(repositoryRoot, "Sample.cs", 2, 4, out var text, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.Equal("line2\nline3\nline4", text);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that TryGetLines clamps end_line to the file length.
+    /// </summary>
+    [Fact]
+    public void TryGetLines_ClampsEndLineToFileLength()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllLines(Path.Combine(repositoryRoot, "Sample.cs"), ["line1", "line2"]);
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryGetLines(repositoryRoot, "Sample.cs", 1, 999, out var text, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.Equal("line1\nline2", text);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that TryGetLines returns an error when start_line exceeds file length.
+    /// </summary>
+    [Fact]
+    public void TryGetLines_FailsWhenStartLineExceedsFileLength()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllLines(Path.Combine(repositoryRoot, "Sample.cs"), ["line1"]);
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryGetLines(repositoryRoot, "Sample.cs", 5, 10, out var text, out var error);
+
+            Assert.False(success);
+            Assert.Null(text);
+            Assert.NotNull(error);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
     private static string CreateTempRoot()
     {
         var path = Path.Combine(Path.GetTempPath(), "rosalyn-tests-" + Guid.NewGuid().ToString("N"));

@@ -34,6 +34,7 @@ Tool specs live in `docs/tools/<tool-name>.md`. See the registry in `docs/design
 | `get_members` | [docs/tools/get_members.md](tools/get_members.md) |
 | `get_interface_implementations` | [docs/tools/get_interface_implementations.md](tools/get_interface_implementations.md) |
 | `get_call_hierarchy` | [docs/tools/get_call_hierarchy.md](tools/get_call_hierarchy.md) |
+| `get_lines` | [docs/tools/get_lines.md](tools/get_lines.md) |
 
 ## Semantic compilation
 - On `set_root`, `RoslynInspector.LoadProjects` discovers all `.csproj` files under the session root.
