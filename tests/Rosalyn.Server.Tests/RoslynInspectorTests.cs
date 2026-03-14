@@ -189,6 +189,61 @@ public sealed class RoslynInspectorTests
     }
 
     /// <summary>
+    /// Verifies that TryGetProjectForFile returns the owning project for a source file.
+    /// </summary>
+    [Fact]
+    public void TryGetProjectForFile_ReturnsOwningProject()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "Demo.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(Path.Combine(repositoryRoot, "Sample.cs"), "namespace Demo; public class C { }");
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            inspector.LoadProjects(repositoryRoot);
+
+            var success = inspector.TryGetProjectForFile(repositoryRoot, "Sample.cs", out var projects, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(projects);
+            Assert.Single(projects!);
+            Assert.Contains("Demo.csproj", projects![0]);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that TryGetProjectForFile returns an error for a file not in any project.
+    /// </summary>
+    [Fact]
+    public void TryGetProjectForFile_FailsForUnknownFile()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "Demo.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            inspector.LoadProjects(repositoryRoot);
+
+            var success = inspector.TryGetProjectForFile(repositoryRoot, "Missing.cs", out var projects, out var error);
+
+            Assert.False(success);
+            Assert.Null(projects);
+            Assert.NotNull(error);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
     /// Verifies that LoadProjects discovers a .csproj and exposes it as a known project.
     /// </summary>
     [Fact]

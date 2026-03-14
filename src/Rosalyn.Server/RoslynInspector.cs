@@ -252,6 +252,55 @@ internal sealed class RoslynInspector
         projectCompilations is null ? null : projectCompilations.Keys.ToList();
 
     /// <summary>
+    /// Returns the relative .csproj paths whose source tree contains
+    /// <paramref name="relativePath"/>. Returns all matches when a file
+    /// appears in multiple projects.
+    /// </summary>
+    /// <param name="repositoryRoot">Absolute session root path.</param>
+    /// <param name="relativePath">Repository-relative path to a .cs file.</param>
+    /// <param name="projects">Matching project keys on success.</param>
+    /// <param name="error">Error details on failure.</param>
+    /// <returns><c>true</c> on success; otherwise <c>false</c>.</returns>
+    public bool TryGetProjectForFile(
+        string repositoryRoot,
+        string relativePath,
+        out IReadOnlyList<string>? projects,
+        out string? error)
+    {
+        projects = null;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(relativePath))
+        {
+            error = "Argument 'path' is required.";
+            return false;
+        }
+
+        if (projectTrees is null)
+        {
+            error = "No projects loaded. Ensure set_root was called successfully.";
+            return false;
+        }
+
+        var absolutePath = Path.GetFullPath(Path.Combine(repositoryRoot, relativePath));
+
+        var matches = projectTrees
+            .Where(kv => kv.Value.Any(t =>
+                string.Equals(t.FilePath, absolutePath, StringComparison.OrdinalIgnoreCase)))
+            .Select(kv => kv.Key)
+            .ToList();
+
+        if (matches.Count == 0)
+        {
+            error = $"File not found in any loaded project: {relativePath}";
+            return false;
+        }
+
+        projects = matches;
+        return true;
+    }
+
+    /// <summary>
     /// Returns true when <paramref name="absolutePath"/> is within any allowed directory.
     /// </summary>
     public bool IsWithinAllowedDirectory(string absolutePath)

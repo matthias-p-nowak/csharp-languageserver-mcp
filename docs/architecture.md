@@ -23,6 +23,7 @@ Tool specs live in `docs/tools/<tool-name>.md`. See the registry in `docs/design
 | `find_references` | [docs/tools/find_references.md](tools/find_references.md) |
 | `get_symbol_definition` | [docs/tools/get_symbol_definition.md](tools/get_symbol_definition.md) |
 | `get_semantic_diagnostics` | [docs/tools/get_semantic_diagnostics.md](tools/get_semantic_diagnostics.md) |
+| `get_project_for_file` | [docs/tools/get_project_for_file.md](tools/get_project_for_file.md) |
 
 ## Semantic compilation
 - On `set_root`, `RoslynInspector.LoadProjects` discovers all `.csproj` files under the session root.

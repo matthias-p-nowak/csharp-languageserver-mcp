@@ -293,6 +293,20 @@ internal sealed class McpServer
                         },
                         new
                         {
+                            name = "get_project_for_file",
+                            description = "Return the .csproj project(s) that own a given .cs file. Useful before invoking tools that accept an optional 'project' argument.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    path = new { type = "string", description = "Repository-relative path to the .cs file." }
+                                },
+                                required = new[] { "path" }
+                            }
+                        },
+                        new
+                        {
                             name = "find_references",
                             description = "Find all usage sites of a named symbol across a project. Requires semantic compilation.",
                             inputSchema = new
@@ -589,6 +603,26 @@ internal sealed class McpServer
                         text = JsonSerializer.Serialize(new { symbols }, jsonOptions)
                     }
                 }
+            };
+        }
+
+        if (string.Equals(toolName, "get_project_for_file", StringComparison.Ordinal))
+        {
+            if (!TryGetStringProperty(request, out var path, "params", "arguments", "path") || string.IsNullOrWhiteSpace(path))
+            {
+                return CreateToolError("Missing required argument: path");
+            }
+
+            if (!inspector.TryGetProjectForFile(sessionRoot, path, out var projects, out var error))
+            {
+                return CreateToolError(error ?? "Unknown get_project_for_file error.");
+            }
+
+            return new
+            {
+                isError = false,
+                structuredContent = new { projects },
+                content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { projects }, jsonOptions) } }
             };
         }
 
