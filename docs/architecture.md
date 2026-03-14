@@ -10,6 +10,9 @@
 - `src/Rosalyn.Server/ReferenceMatch.cs`: typed output contract for `find_references` usage sites.
 - `src/Rosalyn.Server/SemanticDiagnostic.cs`: typed output contract for `get_semantic_diagnostics`.
 - `src/Rosalyn.Server/MethodBodyResult.cs`: typed output contract for `get_method_body`.
+- `src/Rosalyn.Server/MemberResult.cs`: typed output contract for `get_members`.
+- `src/Rosalyn.Server/ImplementorResult.cs`: typed output contract for `get_interface_implementations`.
+- `src/Rosalyn.Server/CallHierarchyNode.cs`: typed output contract for `get_call_hierarchy`.
 
 ## Implemented tools
 Tool specs live in `docs/tools/<tool-name>.md`. See the registry in `docs/design.md`.
@@ -26,6 +29,11 @@ Tool specs live in `docs/tools/<tool-name>.md`. See the registry in `docs/design
 | `get_semantic_diagnostics` | [docs/tools/get_semantic_diagnostics.md](tools/get_semantic_diagnostics.md) |
 | `get_project_for_file` | [docs/tools/get_project_for_file.md](tools/get_project_for_file.md) |
 | `get_method_body` | [docs/tools/get_method_body.md](tools/get_method_body.md) |
+| `get_namespace_for_file` | [docs/tools/get_namespace_for_file.md](tools/get_namespace_for_file.md) |
+| `list_source_files` | [docs/tools/list_source_files.md](tools/list_source_files.md) |
+| `get_members` | [docs/tools/get_members.md](tools/get_members.md) |
+| `get_interface_implementations` | [docs/tools/get_interface_implementations.md](tools/get_interface_implementations.md) |
+| `get_call_hierarchy` | [docs/tools/get_call_hierarchy.md](tools/get_call_hierarchy.md) |
 
 ## Semantic compilation
 - On `set_root`, `RoslynInspector.LoadProjects` discovers all `.csproj` files under the session root.

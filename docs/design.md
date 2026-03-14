@@ -18,6 +18,11 @@ Rosalyn is an MCP server built with C#/.NET that provides codebase insight using
 - DR-013 (get_semantic_diagnostics): Expose a `get_semantic_diagnostics` MCP tool that returns compiler errors and warnings for a `.cs` file or whole project. Requires semantic compilation (DR-010). Accepts optional `project` argument per RQ-008.
 - DR-014 (get_project_for_file): Expose a `get_project_for_file` MCP tool that, given a repository-relative `.cs` file path, returns the relative `.csproj` path(s) whose source tree contains that file. Syntax-only — uses the cached project source file lists from DR-010. Returns all matching projects if a file appears in multiple.
 - DR-015 (get_method_body): Expose a `get_method_body` MCP tool that, given a method name and optional scoping arguments (`path` for a single file or `directory` for a subtree), returns the full source text of each matching method with its file path and start/end line numbers. Syntax-only. Multiple matches are returned when overloads or same-named methods exist across files.
+- DR-016 (get_namespace_for_file): Expose a `get_namespace_for_file` MCP tool that returns the namespace names declared in a single `.cs` file, in source order. Returns an empty list when no namespace is declared. Syntax-only.
+- DR-017 (list_source_files): Expose a `list_source_files` MCP tool that returns repository-relative paths for all C# source files. When projects are loaded (DR-010), returns files from the selected (or auto-selected) project, excluding `obj/` trees. Falls back to a full directory scan when no projects are loaded. Accepts optional `project` argument per RQ-008.
+- DR-018 (get_members): Expose a `get_members` MCP tool that, given a type name and directory, returns all members (fields, properties, methods, constructors, events) of that type across all `.cs` files under the directory, with file, line, kind, name, and signature. Syntax-only.
+- DR-019 (get_interface_implementations): Expose a `get_interface_implementations` MCP tool that, given an interface name and directory, returns all classes, records, and structs whose base list contains that interface name (matched by simple name). Syntax-only.
+- DR-020 (get_call_hierarchy): Expose a `get_call_hierarchy` MCP tool that, given a method name, direction ("up" for callers / "down" for callees), max depth (1–5, default 2), and directory, returns a tree of `CallHierarchyNode` records. Cycle detection prevents infinite recursion. Syntax-only.
 
 ## Server startup
 - CLI args are a list of allowed absolute directory paths; no `--root` arg.
@@ -43,6 +48,11 @@ Each tool has its own spec in `docs/tools/<tool-name>.md`. Load only the relevan
 | `get_semantic_diagnostics` | [docs/tools/get_semantic_diagnostics.md](tools/get_semantic_diagnostics.md) |
 | `get_project_for_file` | [docs/tools/get_project_for_file.md](tools/get_project_for_file.md) |
 | `get_method_body` | [docs/tools/get_method_body.md](tools/get_method_body.md) |
+| `get_namespace_for_file` | [docs/tools/get_namespace_for_file.md](tools/get_namespace_for_file.md) |
+| `list_source_files` | [docs/tools/list_source_files.md](tools/list_source_files.md) |
+| `get_members` | [docs/tools/get_members.md](tools/get_members.md) |
+| `get_interface_implementations` | [docs/tools/get_interface_implementations.md](tools/get_interface_implementations.md) |
+| `get_call_hierarchy` | [docs/tools/get_call_hierarchy.md](tools/get_call_hierarchy.md) |
 
 ## MCP transport behavior
 See [docs/handshake.md](handshake.md) for the full transport and handshake spec.

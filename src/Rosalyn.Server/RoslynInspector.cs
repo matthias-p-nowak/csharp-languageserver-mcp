@@ -1025,6 +1025,651 @@ internal sealed class RoslynInspector
         return complexity;
     }
 
+    /// <summary>
+    /// Returns the namespace names declared in a single repository-relative C# file.
+    /// Returns an empty list (success) if the file declares no namespace.
+    /// </summary>
+    /// <param name="repositoryRoot">Absolute session root path.</param>
+    /// <param name="relativePath">Repository-relative path to a .cs file.</param>
+    /// <param name="namespaces">Namespace names in source order on success.</param>
+    /// <param name="error">Error details on failure.</param>
+    /// <returns><c>true</c> on success; otherwise <c>false</c>.</returns>
+    public bool TryGetNamespacesForFile(
+        string repositoryRoot,
+        string relativePath,
+        out IReadOnlyList<string>? namespaces,
+        out string? error)
+    {
+        namespaces = null;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(relativePath))
+        {
+            error = "Argument 'path' is required.";
+            return false;
+        }
+
+        if (!relativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+        {
+            error = "Only .cs files are supported.";
+            return false;
+        }
+
+        var absolutePath = Path.GetFullPath(Path.Combine(repositoryRoot, relativePath));
+
+        if (!IsWithinDirectory(absolutePath, repositoryRoot))
+        {
+            error = "The provided path must be inside the repository root.";
+            return false;
+        }
+
+        if (!IsWithinAllowedDirectory(absolutePath))
+        {
+            error = "The provided path is not within any allowed directory.";
+            return false;
+        }
+
+        if (!File.Exists(absolutePath))
+        {
+            error = $"File not found: {relativePath}";
+            return false;
+        }
+
+        var source = File.ReadAllText(absolutePath);
+        var tree = CSharpSyntaxTree.ParseText(source, path: absolutePath);
+        var root = tree.GetCompilationUnitRoot();
+
+        var names = root.DescendantNodes()
+            .Select(n => n switch
+            {
+                NamespaceDeclarationSyntax ns => ns.Name.ToString(),
+                FileScopedNamespaceDeclarationSyntax fns => fns.Name.ToString(),
+                _ => null
+            })
+            .Where(n => n is not null)
+            .Distinct()
+            .Cast<string>()
+            .ToList();
+
+        namespaces = names;
+        return true;
+    }
+
+    /// <summary>
+    /// Returns repository-relative paths for all C# source files.
+    /// If projects are loaded, returns files from the specified (or auto-selected) project,
+    /// excluding those under <c>obj/</c>. If no projects are loaded, falls back to a
+    /// directory scan of <paramref name="repositoryRoot"/>.
+    /// </summary>
+    /// <param name="repositoryRoot">Absolute session root path.</param>
+    /// <param name="relativeProject">Optional relative .csproj path to select project.</param>
+    /// <param name="files">Repository-relative file paths on success.</param>
+    /// <param name="error">Error details on failure.</param>
+    /// <returns><c>true</c> on success; otherwise <c>false</c>.</returns>
+    public bool TryListSourceFiles(
+        string repositoryRoot,
+        string? relativeProject,
+        out IReadOnlyList<string>? files,
+        out string? error)
+    {
+        files = null;
+        error = null;
+
+        if (projectTrees is not null)
+        {
+            // Projects are loaded — use project trees, respecting optional project arg.
+            if (!string.IsNullOrWhiteSpace(relativeProject))
+            {
+                if (!projectTrees.TryGetValue(relativeProject, out var trees))
+                {
+                    error = $"Project not found: {relativeProject}. Known projects: {string.Join(", ", projectTrees.Keys)}";
+                    return false;
+                }
+
+                files = trees
+                    .Where(t => !string.IsNullOrWhiteSpace(t.FilePath))
+                    .Select(t => Path.GetRelativePath(repositoryRoot, t.FilePath))
+                    .Where(p => !p.StartsWith("obj" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                return true;
+            }
+
+            if (projectTrees.Count == 1)
+            {
+                var trees = projectTrees.Values.First();
+                files = trees
+                    .Where(t => !string.IsNullOrWhiteSpace(t.FilePath))
+                    .Select(t => Path.GetRelativePath(repositoryRoot, t.FilePath))
+                    .Where(p => !p.StartsWith("obj" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                return true;
+            }
+
+            if (projectTrees.Count == 0)
+            {
+                files = new List<string>();
+                return true;
+            }
+
+            error = $"Multiple projects found. Specify 'project': {string.Join(", ", projectTrees.Keys)}";
+            return false;
+        }
+
+        // Fallback: directory scan.
+        var objPath = Path.Combine(repositoryRoot, "obj") + Path.DirectorySeparatorChar;
+        files = Directory
+            .EnumerateFiles(repositoryRoot, "*.cs", SearchOption.AllDirectories)
+            .Where(cs => !cs.StartsWith(objPath, StringComparison.OrdinalIgnoreCase))
+            .Select(cs => Path.GetRelativePath(repositoryRoot, cs))
+            .ToList();
+        return true;
+    }
+
+    /// <summary>
+    /// Returns all members of a named type across all .cs files under
+    /// <paramref name="relativeDirectory"/>, excluding <c>obj/</c>.
+    /// </summary>
+    /// <param name="repositoryRoot">Absolute session root path.</param>
+    /// <param name="typeName">Exact type name (case-sensitive).</param>
+    /// <param name="relativeDirectory">Repository-relative directory to scan.</param>
+    /// <param name="members">Members in source order on success.</param>
+    /// <param name="error">Error details on failure.</param>
+    /// <returns><c>true</c> on success; otherwise <c>false</c>.</returns>
+    public bool TryGetMembers(
+        string repositoryRoot,
+        string typeName,
+        string relativeDirectory,
+        out IReadOnlyList<MemberResult>? members,
+        out string? error)
+    {
+        members = null;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(typeName))
+        {
+            error = "Argument 'name' is required.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(relativeDirectory))
+        {
+            error = "Argument 'directory' is required.";
+            return false;
+        }
+
+        var absoluteDir = Path.GetFullPath(Path.Combine(repositoryRoot, relativeDirectory));
+
+        if (!IsWithinDirectory(absoluteDir, repositoryRoot))
+        {
+            error = "The provided directory must be inside the repository root.";
+            return false;
+        }
+
+        if (!IsWithinAllowedDirectory(absoluteDir))
+        {
+            error = "The provided directory is not within any allowed directory.";
+            return false;
+        }
+
+        if (!Directory.Exists(absoluteDir))
+        {
+            error = $"Directory not found: {relativeDirectory}";
+            return false;
+        }
+
+        var results = new List<MemberResult>();
+        var objPath = absoluteDir.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar;
+
+        foreach (var filePath in Directory.EnumerateFiles(absoluteDir, "*.cs", SearchOption.AllDirectories))
+        {
+            if (filePath.StartsWith(objPath, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var source = File.ReadAllText(filePath);
+            var tree = CSharpSyntaxTree.ParseText(source, path: filePath);
+            var root = tree.GetCompilationUnitRoot();
+            var relativeFilePath = Path.GetRelativePath(repositoryRoot, filePath);
+
+            foreach (var typeDecl in root.DescendantNodes().OfType<TypeDeclarationSyntax>())
+            {
+                if (typeDecl.Identifier.Text != typeName)
+                {
+                    continue;
+                }
+
+                foreach (var member in typeDecl.Members)
+                {
+                    switch (member)
+                    {
+                        case FieldDeclarationSyntax field:
+                            foreach (var variable in field.Declaration.Variables)
+                            {
+                                var line = tree.GetLineSpan(variable.Identifier.Span).StartLinePosition.Line + 1;
+                                var sig = NormalizeSignature(field.ToFullString());
+                                results.Add(new MemberResult(relativeFilePath, line, typeName, "Field", variable.Identifier.Text, sig));
+                            }
+                            break;
+
+                        case PropertyDeclarationSyntax prop:
+                        {
+                            var line = tree.GetLineSpan(prop.Identifier.Span).StartLinePosition.Line + 1;
+                            var sig = NormalizeSignature(prop.ToFullString());
+                            results.Add(new MemberResult(relativeFilePath, line, typeName, "Property", prop.Identifier.Text, sig));
+                            break;
+                        }
+
+                        case MethodDeclarationSyntax method:
+                        {
+                            var line = tree.GetLineSpan(method.Identifier.Span).StartLinePosition.Line + 1;
+                            var sig = NormalizeSignature(method.ToFullString());
+                            results.Add(new MemberResult(relativeFilePath, line, typeName, "Method", method.Identifier.Text, sig));
+                            break;
+                        }
+
+                        case ConstructorDeclarationSyntax ctor:
+                        {
+                            var line = tree.GetLineSpan(ctor.Identifier.Span).StartLinePosition.Line + 1;
+                            var sig = NormalizeSignature(ctor.ToFullString());
+                            results.Add(new MemberResult(relativeFilePath, line, typeName, "Constructor", ctor.Identifier.Text, sig));
+                            break;
+                        }
+
+                        case EventFieldDeclarationSyntax eventField:
+                        {
+                            var firstVar = eventField.Declaration.Variables.First();
+                            var line = tree.GetLineSpan(firstVar.Identifier.Span).StartLinePosition.Line + 1;
+                            var sig = NormalizeSignature(eventField.ToFullString());
+                            results.Add(new MemberResult(relativeFilePath, line, typeName, "Event", firstVar.Identifier.Text, sig));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        members = results;
+        return true;
+    }
+
+    /// <summary>
+    /// Normalizes a member's full text into a single-line signature by truncating at
+    /// the first <c>{</c>, <c>=&gt;</c>, or <c>;</c> and collapsing whitespace.
+    /// </summary>
+    private static string NormalizeSignature(string fullText)
+    {
+        var end = fullText.Length;
+        foreach (var ch in new[] { '{', ';' })
+        {
+            var idx = fullText.IndexOf(ch);
+            if (idx >= 0 && idx < end) end = idx;
+        }
+
+        var arrowIdx = fullText.IndexOf("=>", StringComparison.Ordinal);
+        if (arrowIdx >= 0 && arrowIdx < end) end = arrowIdx;
+
+        return System.Text.RegularExpressions.Regex.Replace(fullText[..end].Trim(), @"\s+", " ");
+    }
+
+    /// <summary>
+    /// Finds all types (classes, records, structs) that implement a named interface,
+    /// scanning all .cs files under <paramref name="relativeDirectory"/>.
+    /// </summary>
+    /// <param name="repositoryRoot">Absolute session root path.</param>
+    /// <param name="interfaceName">Exact interface name (simple name, case-sensitive).</param>
+    /// <param name="relativeDirectory">Repository-relative directory to scan.</param>
+    /// <param name="implementors">Matching types on success.</param>
+    /// <param name="error">Error details on failure.</param>
+    /// <returns><c>true</c> on success; otherwise <c>false</c>.</returns>
+    public bool TryGetInterfaceImplementations(
+        string repositoryRoot,
+        string interfaceName,
+        string relativeDirectory,
+        out IReadOnlyList<ImplementorResult>? implementors,
+        out string? error)
+    {
+        implementors = null;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(interfaceName))
+        {
+            error = "Argument 'name' is required.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(relativeDirectory))
+        {
+            error = "Argument 'directory' is required.";
+            return false;
+        }
+
+        var absoluteDir = Path.GetFullPath(Path.Combine(repositoryRoot, relativeDirectory));
+
+        if (!IsWithinDirectory(absoluteDir, repositoryRoot))
+        {
+            error = "The provided directory must be inside the repository root.";
+            return false;
+        }
+
+        if (!IsWithinAllowedDirectory(absoluteDir))
+        {
+            error = "The provided directory is not within any allowed directory.";
+            return false;
+        }
+
+        if (!Directory.Exists(absoluteDir))
+        {
+            error = $"Directory not found: {relativeDirectory}";
+            return false;
+        }
+
+        var results = new List<ImplementorResult>();
+        var objPath = absoluteDir.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar;
+
+        foreach (var filePath in Directory.EnumerateFiles(absoluteDir, "*.cs", SearchOption.AllDirectories))
+        {
+            if (filePath.StartsWith(objPath, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var source = File.ReadAllText(filePath);
+            var tree = CSharpSyntaxTree.ParseText(source, path: filePath);
+            var root = tree.GetCompilationUnitRoot();
+            var relativeFilePath = Path.GetRelativePath(repositoryRoot, filePath);
+
+            foreach (var typeDecl in root.DescendantNodes().OfType<TypeDeclarationSyntax>())
+            {
+                // Skip interfaces and enums — only classes, records, structs.
+                if (typeDecl is InterfaceDeclarationSyntax)
+                {
+                    continue;
+                }
+
+                if (typeDecl.BaseList is null)
+                {
+                    continue;
+                }
+
+                var implements = typeDecl.BaseList.Types
+                    .Select(bt => bt.Type)
+                    .Any(t => ExtractSimpleName(t) == interfaceName);
+
+                if (!implements)
+                {
+                    continue;
+                }
+
+                var line = tree.GetLineSpan(typeDecl.Identifier.Span).StartLinePosition.Line + 1;
+
+                var typeKind = typeDecl switch
+                {
+                    RecordDeclarationSyntax rec =>
+                        rec.ClassOrStructKeyword.IsKind(SyntaxKind.StructKeyword) ? "Record Struct" : "Record",
+                    StructDeclarationSyntax => "Struct",
+                    _ => "Class"
+                };
+
+                results.Add(new ImplementorResult(relativeFilePath, line, typeDecl.Identifier.Text, typeKind));
+            }
+        }
+
+        implementors = results;
+        return true;
+    }
+
+    /// <summary>
+    /// Extracts the simple (rightmost) identifier from a type name syntax node.
+    /// </summary>
+    private static string ExtractSimpleName(TypeSyntax type) => type switch
+    {
+        GenericNameSyntax g => g.Identifier.Text,
+        QualifiedNameSyntax q => q.Right.Identifier.Text,
+        IdentifierNameSyntax id => id.Identifier.Text,
+        _ => string.Empty
+    };
+
+    /// <summary>
+    /// Builds a call hierarchy rooted at all declarations of <paramref name="methodName"/>.
+    /// </summary>
+    /// <param name="repositoryRoot">Absolute session root path.</param>
+    /// <param name="methodName">Exact method name (case-sensitive).</param>
+    /// <param name="direction">"down" for callees, "up" for callers.</param>
+    /// <param name="maxDepth">Maximum recursion depth (clamped 1–5).</param>
+    /// <param name="relativeDirectory">Repository-relative directory to scan.</param>
+    /// <param name="roots">Root nodes on success.</param>
+    /// <param name="error">Error details on failure.</param>
+    /// <returns><c>true</c> on success; otherwise <c>false</c>.</returns>
+    public bool TryGetCallHierarchy(
+        string repositoryRoot,
+        string methodName,
+        string direction,
+        int maxDepth,
+        string relativeDirectory,
+        out IReadOnlyList<CallHierarchyNode>? roots,
+        out string? error)
+    {
+        roots = null;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(methodName))
+        {
+            error = "Argument 'name' is required.";
+            return false;
+        }
+
+        if (direction != "up" && direction != "down")
+        {
+            error = "Argument 'direction' must be 'up' or 'down'.";
+            return false;
+        }
+
+        maxDepth = Math.Clamp(maxDepth, 1, 5);
+
+        if (string.IsNullOrWhiteSpace(relativeDirectory))
+        {
+            error = "Argument 'directory' is required.";
+            return false;
+        }
+
+        var absoluteDir = Path.GetFullPath(Path.Combine(repositoryRoot, relativeDirectory));
+
+        if (!IsWithinDirectory(absoluteDir, repositoryRoot))
+        {
+            error = "The provided directory must be inside the repository root.";
+            return false;
+        }
+
+        if (!IsWithinAllowedDirectory(absoluteDir))
+        {
+            error = "The provided directory is not within any allowed directory.";
+            return false;
+        }
+
+        if (!Directory.Exists(absoluteDir))
+        {
+            error = $"Directory not found: {relativeDirectory}";
+            return false;
+        }
+
+        // Pre-scan: build index of all method declarations keyed by method name.
+        var objPath = absoluteDir.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar;
+        var index = new Dictionary<string, List<(string file, int line, string containingType, MethodDeclarationSyntax node, SyntaxTree tree)>>(StringComparer.Ordinal);
+
+        foreach (var filePath in Directory.EnumerateFiles(absoluteDir, "*.cs", SearchOption.AllDirectories))
+        {
+            if (filePath.StartsWith(objPath, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var source = File.ReadAllText(filePath);
+            var tree = CSharpSyntaxTree.ParseText(source, path: filePath);
+            var root = tree.GetCompilationUnitRoot();
+            var relativeFilePath = Path.GetRelativePath(repositoryRoot, filePath);
+
+            foreach (var method in root.DescendantNodes().OfType<MethodDeclarationSyntax>())
+            {
+                var name = method.Identifier.Text;
+                var containingType = method.Ancestors()
+                    .OfType<TypeDeclarationSyntax>()
+                    .FirstOrDefault()?.Identifier.Text ?? string.Empty;
+                var lineNum = tree.GetLineSpan(method.Identifier.Span).StartLinePosition.Line + 1;
+
+                if (!index.TryGetValue(name, out var list))
+                {
+                    list = new List<(string, int, string, MethodDeclarationSyntax, SyntaxTree)>();
+                    index[name] = list;
+                }
+
+                list.Add((relativeFilePath, lineNum, containingType, method, tree));
+            }
+        }
+
+        if (!index.TryGetValue(methodName, out var rootDecls) || rootDecls.Count == 0)
+        {
+            roots = new List<CallHierarchyNode>();
+            return true;
+        }
+
+        var rootNodes = new List<CallHierarchyNode>();
+
+        if (direction == "down")
+        {
+            foreach (var (file, line, containingType, node, tree) in rootDecls)
+            {
+                var visited = new HashSet<string>();
+                var key = $"{containingType}.{methodName}@{file}:{line}";
+                visited.Add(key);
+                var children = BuildCalleeChildren(node, tree, index, repositoryRoot, visited, maxDepth - 1);
+                rootNodes.Add(new CallHierarchyNode(file, line, containingType, methodName, children));
+            }
+        }
+        else
+        {
+            foreach (var (file, line, containingType, _, _) in rootDecls)
+            {
+                var visited = new HashSet<string>();
+                var key = $"{containingType}.{methodName}@{file}:{line}";
+                visited.Add(key);
+                var callers = BuildCallerChildren(methodName, index, visited, maxDepth - 1);
+                rootNodes.Add(new CallHierarchyNode(file, line, containingType, methodName, callers));
+            }
+        }
+
+        roots = rootNodes;
+        return true;
+    }
+
+    /// <summary>
+    /// Recursively builds callee nodes for a method body.
+    /// </summary>
+    private static IReadOnlyList<CallHierarchyNode> BuildCalleeChildren(
+        MethodDeclarationSyntax method,
+        SyntaxTree tree,
+        Dictionary<string, List<(string file, int line, string containingType, MethodDeclarationSyntax node, SyntaxTree tree)>> index,
+        string repositoryRoot,
+        HashSet<string> visited,
+        int remainingDepth)
+    {
+        var children = new List<CallHierarchyNode>();
+
+        if (remainingDepth < 0 || method.Body is null && method.ExpressionBody is null)
+        {
+            return children;
+        }
+
+        var invocations = method.DescendantNodes().OfType<InvocationExpressionSyntax>();
+
+        foreach (var inv in invocations)
+        {
+            string calleeName = inv.Expression switch
+            {
+                MemberAccessExpressionSyntax ma => ma.Name.Identifier.Text,
+                IdentifierNameSyntax id => id.Identifier.Text,
+                _ => string.Empty
+            };
+
+            if (string.IsNullOrEmpty(calleeName) || !index.TryGetValue(calleeName, out var decls))
+            {
+                continue;
+            }
+
+            foreach (var (file, line, containingType, node, calleeTree) in decls)
+            {
+                var key = $"{containingType}.{calleeName}@{file}:{line}";
+                if (visited.Contains(key))
+                {
+                    children.Add(new CallHierarchyNode(file, line, containingType, calleeName, new List<CallHierarchyNode>()));
+                    continue;
+                }
+
+                visited.Add(key);
+                var grandChildren = BuildCalleeChildren(node, calleeTree, index, repositoryRoot, visited, remainingDepth - 1);
+                visited.Remove(key);
+                children.Add(new CallHierarchyNode(file, line, containingType, calleeName, grandChildren));
+            }
+        }
+
+        return children;
+    }
+
+    /// <summary>
+    /// Recursively builds caller nodes for a method name.
+    /// </summary>
+    private static IReadOnlyList<CallHierarchyNode> BuildCallerChildren(
+        string targetMethod,
+        Dictionary<string, List<(string file, int line, string containingType, MethodDeclarationSyntax node, SyntaxTree tree)>> index,
+        HashSet<string> visited,
+        int remainingDepth)
+    {
+        var callers = new List<CallHierarchyNode>();
+
+        if (remainingDepth < 0)
+        {
+            return callers;
+        }
+
+        foreach (var (callerName, decls) in index)
+        {
+            foreach (var (file, line, containingType, node, tree) in decls)
+            {
+                var callsTarget = node.DescendantNodes()
+                    .OfType<InvocationExpressionSyntax>()
+                    .Any(inv =>
+                    {
+                        string name = inv.Expression switch
+                        {
+                            MemberAccessExpressionSyntax ma => ma.Name.Identifier.Text,
+                            IdentifierNameSyntax id => id.Identifier.Text,
+                            _ => string.Empty
+                        };
+                        return name == targetMethod;
+                    });
+
+                if (!callsTarget)
+                {
+                    continue;
+                }
+
+                var key = $"{containingType}.{callerName}@{file}:{line}";
+                if (visited.Contains(key))
+                {
+                    callers.Add(new CallHierarchyNode(file, line, containingType, callerName, new List<CallHierarchyNode>()));
+                    continue;
+                }
+
+                visited.Add(key);
+                var grandCallers = BuildCallerChildren(callerName, index, visited, remainingDepth - 1);
+                visited.Remove(key);
+                callers.Add(new CallHierarchyNode(file, line, containingType, callerName, grandCallers));
+            }
+        }
+
+        return callers;
+    }
+
     private static bool IsWithinDirectory(string absolutePath, string directory)
     {
         var dirWithSeparator = directory.EndsWith(Path.DirectorySeparatorChar)

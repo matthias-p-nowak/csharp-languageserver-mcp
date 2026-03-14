@@ -453,6 +453,386 @@ public sealed class RoslynInspectorTests
         }
     }
 
+    // --- P-016: get_namespace_for_file ---
+
+    /// <summary>
+    /// Verifies that TryGetNamespacesForFile returns the name of a file-scoped namespace.
+    /// </summary>
+    [Fact]
+    public void TryGetNamespacesForFile_FileScopedNamespace_ReturnsName()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "Sample.cs"), "namespace Demo.Utils; public class C { }");
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryGetNamespacesForFile(repositoryRoot, "Sample.cs", out var namespaces, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(namespaces);
+            Assert.Single(namespaces!);
+            Assert.Equal("Demo.Utils", namespaces![0]);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that TryGetNamespacesForFile returns the name of a block-scoped namespace.
+    /// </summary>
+    [Fact]
+    public void TryGetNamespacesForFile_BlockScopedNamespace_ReturnsName()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "Sample.cs"), "namespace Demo.Block { public class C { } }");
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryGetNamespacesForFile(repositoryRoot, "Sample.cs", out var namespaces, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(namespaces);
+            Assert.Single(namespaces!);
+            Assert.Equal("Demo.Block", namespaces![0]);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that TryGetNamespacesForFile returns an empty list (not an error) for a file with no namespace.
+    /// </summary>
+    [Fact]
+    public void TryGetNamespacesForFile_NoNamespace_ReturnsEmptyList()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "Sample.cs"), "public class C { }");
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryGetNamespacesForFile(repositoryRoot, "Sample.cs", out var namespaces, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(namespaces);
+            Assert.Empty(namespaces!);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    // --- P-013: list_source_files ---
+
+    /// <summary>
+    /// Verifies that TryListSourceFiles returns project .cs files and excludes obj/ after LoadProjects.
+    /// </summary>
+    [Fact]
+    public void TryListSourceFiles_AfterLoadProjects_ReturnsProjectFilesExcludingObj()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "Demo.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(Path.Combine(repositoryRoot, "Sample.cs"), "namespace Demo; public class C { }");
+
+            var objDir = Path.Combine(repositoryRoot, "obj");
+            Directory.CreateDirectory(objDir);
+            File.WriteAllText(Path.Combine(objDir, "Generated.cs"), "// generated");
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            inspector.LoadProjects(repositoryRoot);
+
+            var success = inspector.TryListSourceFiles(repositoryRoot, null, out var files, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(files);
+            Assert.Contains(files!, f => f.EndsWith("Sample.cs"));
+            Assert.DoesNotContain(files!, f => f.Contains("obj"));
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that TryListSourceFiles falls back to a directory scan when no projects are loaded.
+    /// </summary>
+    [Fact]
+    public void TryListSourceFiles_NoProjectsLoaded_FallsBackToDirectoryScan()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "Sample.cs"), "public class C { }");
+            File.WriteAllText(Path.Combine(repositoryRoot, "Other.cs"), "public class D { }");
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            // LoadProjects NOT called
+
+            var success = inspector.TryListSourceFiles(repositoryRoot, null, out var files, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(files);
+            Assert.Contains(files!, f => f.EndsWith("Sample.cs"));
+            Assert.Contains(files!, f => f.EndsWith("Other.cs"));
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    // --- P-004: get_members ---
+
+    /// <summary>
+    /// Verifies that TryGetMembers returns field, property, method, and constructor with correct kinds.
+    /// </summary>
+    [Fact]
+    public void TryGetMembers_ReturnsAllMemberKinds()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "Sample.cs"), """
+                namespace Demo;
+                public class MyType
+                {
+                    public int Field1;
+                    public string Name { get; set; }
+                    public MyType() { }
+                    public void DoWork() { }
+                }
+                """);
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryGetMembers(repositoryRoot, "MyType", ".", out var members, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(members);
+            var kinds = members!.Select(m => m.MemberKind).ToList();
+            Assert.Contains("Field", kinds);
+            Assert.Contains("Property", kinds);
+            Assert.Contains("Constructor", kinds);
+            Assert.Contains("Method", kinds);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that TryGetMembers returns members from both files when two files declare the same type name.
+    /// </summary>
+    [Fact]
+    public void TryGetMembers_TwoFilesWithSameTypeName_ReturnsBoth()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "A.cs"), "namespace Ns1; public class Widget { public void Render() { } }");
+            File.WriteAllText(Path.Combine(repositoryRoot, "B.cs"), "namespace Ns2; public class Widget { public void Update() { } }");
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryGetMembers(repositoryRoot, "Widget", ".", out var members, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(members);
+            Assert.Equal(2, members!.Count);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    // --- P-002: get_interface_implementations ---
+
+    /// <summary>
+    /// Verifies that TryGetInterfaceImplementations returns two classes implementing IFoo and excludes
+    /// a class that does not implement it.
+    /// </summary>
+    [Fact]
+    public void TryGetInterfaceImplementations_ReturnsImplementorsExcludesNonImplementors()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "Sample.cs"), """
+                namespace Demo;
+                public interface IFoo { }
+                public class Alpha : IFoo { }
+                public class Beta : SomeBase, IFoo { }
+                public class Gamma { }
+                """);
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryGetInterfaceImplementations(repositoryRoot, "IFoo", ".", out var implementors, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(implementors);
+            Assert.Equal(2, implementors!.Count);
+            Assert.Contains(implementors!, i => i.TypeName == "Alpha");
+            Assert.Contains(implementors!, i => i.TypeName == "Beta");
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that TryGetInterfaceImplementations matches generic interface by simple name.
+    /// </summary>
+    [Fact]
+    public void TryGetInterfaceImplementations_MatchesGenericInterfaceBySimpleName()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "Sample.cs"), """
+                namespace Demo;
+                public interface IFoo<T> { }
+                public class Handler : IFoo<string> { }
+                """);
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryGetInterfaceImplementations(repositoryRoot, "IFoo", ".", out var implementors, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(implementors);
+            Assert.Single(implementors!);
+            Assert.Equal("Handler", implementors![0].TypeName);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    // --- P-003: get_call_hierarchy ---
+
+    /// <summary>
+    /// Verifies that direction "down" produces a root of Outer with child Inner.
+    /// </summary>
+    [Fact]
+    public void TryGetCallHierarchy_Down_OuterCallsInner()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "Sample.cs"), """
+                namespace Demo;
+                public class C
+                {
+                    public void Outer() { Inner(); }
+                    public void Inner() { }
+                }
+                """);
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryGetCallHierarchy(repositoryRoot, "Outer", "down", 2, ".", out var roots, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(roots);
+            Assert.Single(roots!);
+            Assert.Equal("Outer", roots![0].MethodName);
+            Assert.Single(roots[0].Children);
+            Assert.Equal("Inner", roots[0].Children[0].MethodName);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that direction "up" returns Inner as root with Outer as caller.
+    /// </summary>
+    [Fact]
+    public void TryGetCallHierarchy_Up_InnerCalledByOuter()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "Sample.cs"), """
+                namespace Demo;
+                public class C
+                {
+                    public void Outer() { Inner(); }
+                    public void Inner() { }
+                }
+                """);
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryGetCallHierarchy(repositoryRoot, "Inner", "up", 2, ".", out var roots, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(roots);
+            Assert.Single(roots!);
+            Assert.Equal("Inner", roots![0].MethodName);
+            Assert.Single(roots[0].Children);
+            Assert.Equal("Outer", roots[0].Children[0].MethodName);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that a mutual recursion cycle A↔B does not cause a StackOverflowException.
+    /// </summary>
+    [Fact]
+    public void TryGetCallHierarchy_Cycle_StopsGracefully()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "Sample.cs"), """
+                namespace Demo;
+                public class C
+                {
+                    public void MethodA() { MethodB(); }
+                    public void MethodB() { MethodA(); }
+                }
+                """);
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryGetCallHierarchy(repositoryRoot, "MethodA", "down", 5, ".", out var roots, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(roots);
+            // Should not throw and should return a finite tree.
+            Assert.Single(roots!);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
     private static string CreateTempRoot()
     {
         var path = Path.Combine(Path.GetTempPath(), "rosalyn-tests-" + Guid.NewGuid().ToString("N"));

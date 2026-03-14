@@ -366,6 +366,81 @@ internal sealed class McpServer
                                 },
                                 required = new[] { "name" }
                             }
+                        },
+                        new
+                        {
+                            name = "get_namespace_for_file",
+                            description = "Return the namespace names declared in a repository-relative .cs file. Returns an empty list when no namespace is declared.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    path = new { type = "string", description = "Repository-relative path to a .cs file." }
+                                },
+                                required = new[] { "path" }
+                            }
+                        },
+                        new
+                        {
+                            name = "list_source_files",
+                            description = "Return repository-relative paths for all C# source files. Uses loaded project trees when available; falls back to a directory scan otherwise.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    project = new { type = "string", description = "Optional relative .csproj path. Required when multiple projects are loaded." }
+                                },
+                                required = Array.Empty<string>()
+                            }
+                        },
+                        new
+                        {
+                            name = "get_members",
+                            description = "Return all members (fields, properties, methods, constructors, events) of a named type across .cs files under a directory.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    name = new { type = "string", description = "Exact type name (case-sensitive)." },
+                                    directory = new { type = "string", description = "Repository-relative directory to scan." }
+                                },
+                                required = new[] { "name", "directory" }
+                            }
+                        },
+                        new
+                        {
+                            name = "get_interface_implementations",
+                            description = "Find all classes, records, and structs that implement a named interface, across .cs files under a directory.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    name = new { type = "string", description = "Exact interface name (simple name, case-sensitive)." },
+                                    directory = new { type = "string", description = "Repository-relative directory to scan." }
+                                },
+                                required = new[] { "name", "directory" }
+                            }
+                        },
+                        new
+                        {
+                            name = "get_call_hierarchy",
+                            description = "Build a call hierarchy (callers or callees) for a named method across .cs files under a directory.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    name = new { type = "string", description = "Exact method name (case-sensitive)." },
+                                    direction = new { type = "string", description = "up or down, default down" },
+                                    max_depth = new { type = "integer", description = "1-5, default 2" },
+                                    directory = new { type = "string", description = "Repository-relative directory to scan." }
+                                },
+                                required = new[] { "name", "directory" }
+                            }
                         }
                     }
                 });
@@ -729,6 +804,130 @@ internal sealed class McpServer
                 isError = false,
                 structuredContent = new { diagnostics },
                 content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { diagnostics }, jsonOptions) } }
+            };
+        }
+
+        if (string.Equals(toolName, "get_namespace_for_file", StringComparison.Ordinal))
+        {
+            if (!TryGetStringProperty(request, out var path, "params", "arguments", "path") || string.IsNullOrWhiteSpace(path))
+            {
+                return CreateToolError("Missing required argument: path");
+            }
+
+            if (!inspector.TryGetNamespacesForFile(sessionRoot, path, out var namespaces, out var error))
+            {
+                return CreateToolError(error ?? "Unknown get_namespace_for_file error.");
+            }
+
+            return new
+            {
+                isError = false,
+                structuredContent = new { namespaces },
+                content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { namespaces }, jsonOptions) } }
+            };
+        }
+
+        if (string.Equals(toolName, "list_source_files", StringComparison.Ordinal))
+        {
+            TryGetStringProperty(request, out var project, "params", "arguments", "project");
+
+            if (!inspector.TryListSourceFiles(sessionRoot, project, out var files, out var error))
+            {
+                return CreateToolError(error ?? "Unknown list_source_files error.");
+            }
+
+            return new
+            {
+                isError = false,
+                structuredContent = new { files },
+                content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { files }, jsonOptions) } }
+            };
+        }
+
+        if (string.Equals(toolName, "get_members", StringComparison.Ordinal))
+        {
+            if (!TryGetStringProperty(request, out var name, "params", "arguments", "name") || string.IsNullOrWhiteSpace(name))
+            {
+                return CreateToolError("Missing required argument: name");
+            }
+
+            if (!TryGetStringProperty(request, out var directory, "params", "arguments", "directory") || string.IsNullOrWhiteSpace(directory))
+            {
+                return CreateToolError("Missing required argument: directory");
+            }
+
+            if (!inspector.TryGetMembers(sessionRoot, name, directory, out var members, out var error))
+            {
+                return CreateToolError(error ?? "Unknown get_members error.");
+            }
+
+            return new
+            {
+                isError = false,
+                structuredContent = new { members },
+                content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { members }, jsonOptions) } }
+            };
+        }
+
+        if (string.Equals(toolName, "get_interface_implementations", StringComparison.Ordinal))
+        {
+            if (!TryGetStringProperty(request, out var name, "params", "arguments", "name") || string.IsNullOrWhiteSpace(name))
+            {
+                return CreateToolError("Missing required argument: name");
+            }
+
+            if (!TryGetStringProperty(request, out var directory, "params", "arguments", "directory") || string.IsNullOrWhiteSpace(directory))
+            {
+                return CreateToolError("Missing required argument: directory");
+            }
+
+            if (!inspector.TryGetInterfaceImplementations(sessionRoot, name, directory, out var implementors, out var error))
+            {
+                return CreateToolError(error ?? "Unknown get_interface_implementations error.");
+            }
+
+            return new
+            {
+                isError = false,
+                structuredContent = new { implementors },
+                content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { implementors }, jsonOptions) } }
+            };
+        }
+
+        if (string.Equals(toolName, "get_call_hierarchy", StringComparison.Ordinal))
+        {
+            if (!TryGetStringProperty(request, out var name, "params", "arguments", "name") || string.IsNullOrWhiteSpace(name))
+            {
+                return CreateToolError("Missing required argument: name");
+            }
+
+            if (!TryGetStringProperty(request, out var directory, "params", "arguments", "directory") || string.IsNullOrWhiteSpace(directory))
+            {
+                return CreateToolError("Missing required argument: directory");
+            }
+
+            TryGetStringProperty(request, out var directionArg, "params", "arguments", "direction");
+            var direction = string.IsNullOrWhiteSpace(directionArg) ? "down" : directionArg;
+
+            var maxDepth = 2;
+            if (request.TryGetProperty("params", out var chP) &&
+                chP.TryGetProperty("arguments", out var chArgs) &&
+                chArgs.TryGetProperty("max_depth", out var mdProp) &&
+                mdProp.ValueKind == JsonValueKind.Number)
+            {
+                maxDepth = Math.Clamp(mdProp.GetInt32(), 1, 5);
+            }
+
+            if (!inspector.TryGetCallHierarchy(sessionRoot, name, direction, maxDepth, directory, out var nodes, out var error))
+            {
+                return CreateToolError(error ?? "Unknown get_call_hierarchy error.");
+            }
+
+            return new
+            {
+                isError = false,
+                structuredContent = new { nodes },
+                content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { nodes }, jsonOptions) } }
             };
         }
 
