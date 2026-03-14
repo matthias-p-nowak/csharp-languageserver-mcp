@@ -80,10 +80,10 @@ internal sealed class RoslynInspector
     }
 
     /// <summary>
-    /// Resolves BCL reference assemblies from the .NET SDK ref packs.
-    /// Locates the SDK root via <c>dotnet --info</c>, then finds
-    /// <c>packs/Microsoft.NETCore.App.Ref/&lt;version&gt;/ref/net*</c>.
-    /// Returns an empty list if the ref pack cannot be found.
+    /// Resolves BCL reference assemblies from the .NET shared runtime folder
+    /// (<c>shared/Microsoft.NETCore.App/&lt;version&gt;/</c>).
+    /// Locates the dotnet root via <c>dotnet --info</c>.
+    /// Returns an empty list if the runtime folder cannot be found.
     /// </summary>
     private static IReadOnlyList<MetadataReference> ResolveBclReferences()
     {
@@ -105,34 +105,25 @@ internal sealed class RoslynInspector
 
             // Walk up to dotnet root: .../sdk/9.0.111/ -> .../
             var sdkRoot = Path.GetFullPath(Path.Combine(basePath, "..", ".."));
-            var packsDir = Path.Combine(sdkRoot, "packs", "Microsoft.NETCore.App.Ref");
+            var sharedDir = Path.Combine(sdkRoot, "shared", "Microsoft.NETCore.App");
 
-            if (!Directory.Exists(packsDir))
+            if (!Directory.Exists(sharedDir))
             {
                 return Array.Empty<MetadataReference>();
             }
 
             // Pick highest version directory.
-            var versionDir = Directory.EnumerateDirectories(packsDir)
+            var runtimeDir = Directory.EnumerateDirectories(sharedDir)
                 .OrderByDescending(d => d)
                 .FirstOrDefault();
 
-            if (versionDir is null)
-            {
-                return Array.Empty<MetadataReference>();
-            }
-
-            // Pick first ref/net* subdirectory (e.g. ref/net9.0).
-            var refDir = Directory.EnumerateDirectories(Path.Combine(versionDir, "ref"))
-                .FirstOrDefault();
-
-            if (refDir is null || !Directory.Exists(refDir))
+            if (runtimeDir is null || !Directory.Exists(runtimeDir))
             {
                 return Array.Empty<MetadataReference>();
             }
 
             var refs = new List<MetadataReference>();
-            foreach (var dll in Directory.EnumerateFiles(refDir, "*.dll"))
+            foreach (var dll in Directory.EnumerateFiles(runtimeDir, "*.dll"))
             {
                 try { refs.Add(MetadataReference.CreateFromFile(dll)); }
                 catch { /* skip unreadable */ }
