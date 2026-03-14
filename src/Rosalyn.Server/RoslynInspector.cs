@@ -541,6 +541,13 @@ internal sealed class RoslynInspector
 
             foreach (var node in root.DescendantNodes())
             {
+                // Skip IdentifierNameSyntax whose parent is a MemberAccessExpressionSyntax —
+                // the member access node itself will be matched, avoiding double-counting.
+                if (node is IdentifierNameSyntax && node.Parent is MemberAccessExpressionSyntax)
+                {
+                    continue;
+                }
+
                 string? nodeName = node switch
                 {
                     IdentifierNameSyntax id => id.Identifier.Text,
