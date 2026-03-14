@@ -1,7 +1,6 @@
 # MCP Handshake Note
 
-This document summarizes the expected MCP startup handshake for `Rosalyn.Server`.
-Canonical requirements remain in `docs/design.md`.
+This document is the canonical transport and handshake spec for `Rosalyn.Server`. High-level requirements are in `docs/design.md`.
 
 ## Expected flow
 1. Client sends `initialize` request with `protocolVersion`.
