@@ -13,6 +13,8 @@
 - `src/Rosalyn.Server/MemberResult.cs`: typed output contract for `get_members`.
 - `src/Rosalyn.Server/ImplementorResult.cs`: typed output contract for `get_interface_implementations`.
 - `src/Rosalyn.Server/CallHierarchyNode.cs`: typed output contract for `get_call_hierarchy`.
+- `src/Rosalyn.Server/TestMethodResult.cs`: typed output contract for `find_test_methods`.
+- `src/Rosalyn.Server/XmlDocResult.cs`: typed output contract for `get_xml_doc`.
 
 ## Implemented tools
 Tool specs live in `docs/tools/<tool-name>.md`. See the registry in `docs/design.md`.
@@ -35,6 +37,8 @@ Tool specs live in `docs/tools/<tool-name>.md`. See the registry in `docs/design
 | `get_interface_implementations` | [docs/tools/get_interface_implementations.md](tools/get_interface_implementations.md) |
 | `get_call_hierarchy` | [docs/tools/get_call_hierarchy.md](tools/get_call_hierarchy.md) |
 | `get_lines` | [docs/tools/get_lines.md](tools/get_lines.md) |
+| `find_test_methods` | [docs/tools/find_test_methods.md](tools/find_test_methods.md) |
+| `get_xml_doc` | [docs/tools/get_xml_doc.md](tools/get_xml_doc.md) |
 
 ## Semantic compilation
 - On `set_root`, `RoslynInspector.LoadProjects` discovers all `.csproj` files under the session root.

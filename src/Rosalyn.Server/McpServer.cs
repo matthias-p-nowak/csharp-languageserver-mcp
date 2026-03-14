@@ -55,6 +55,8 @@ internal sealed class McpServer
             ["get_interface_implementations"] = HandleGetInterfaceImplementations,
             ["get_lines"]                     = HandleGetLines,
             ["get_call_hierarchy"]            = HandleGetCallHierarchy,
+            ["find_test_methods"]             = HandleFindTestMethods,
+            ["get_xml_doc"]                   = HandleGetXmlDoc,
         };
     }
 
@@ -477,6 +479,35 @@ internal sealed class McpServer
                                 },
                                 required = new[] { "name", "directory" }
                             }
+                        },
+                        new
+                        {
+                            name = "find_test_methods",
+                            description = "Return all test methods (decorated with [Fact], [Test], [Theory], or [TestMethod]) across .cs files under a directory, with file, line, containing type, and method name.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    directory = new { type = "string", description = "Repository-relative directory to scan." }
+                                },
+                                required = new[] { "directory" }
+                            }
+                        },
+                        new
+                        {
+                            name = "get_xml_doc",
+                            description = "Return the XML doc comment(s) for a named symbol across .cs files under a directory. Returns all matches (overloads, partial types).",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    name = new { type = "string", description = "Exact symbol name (case-sensitive)." },
+                                    directory = new { type = "string", description = "Repository-relative directory to scan." }
+                                },
+                                required = new[] { "name", "directory" }
+                            }
                         }
                     }
                 });
@@ -823,6 +854,30 @@ internal sealed class McpServer
             return CreateToolError(error ?? "Unknown get_call_hierarchy error.");
         return new { isError = false, structuredContent = new { nodes },
             content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { nodes }, jsonOptions) } } };
+    }
+
+    private object HandleFindTestMethods(JsonElement request)
+    {
+        if (RequireSessionRoot() is { } err) return err;
+        if (!TryGetStringProperty(request, out var directory, "params", "arguments", "directory") || string.IsNullOrWhiteSpace(directory))
+            return CreateToolError("Missing required argument: directory");
+        if (!inspector.TryFindTestMethods(sessionRoot!, directory, out var results, out var error))
+            return CreateToolError(error ?? "Unknown find_test_methods error.");
+        return new { isError = false, structuredContent = new { results },
+            content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { results }, jsonOptions) } } };
+    }
+
+    private object HandleGetXmlDoc(JsonElement request)
+    {
+        if (RequireSessionRoot() is { } err) return err;
+        if (!TryGetStringProperty(request, out var name, "params", "arguments", "name") || string.IsNullOrWhiteSpace(name))
+            return CreateToolError("Missing required argument: name");
+        if (!TryGetStringProperty(request, out var directory, "params", "arguments", "directory") || string.IsNullOrWhiteSpace(directory))
+            return CreateToolError("Missing required argument: directory");
+        if (!inspector.TryGetXmlDoc(sessionRoot!, name, directory, out var results, out var error))
+            return CreateToolError(error ?? "Unknown get_xml_doc error.");
+        return new { isError = false, structuredContent = new { results },
+            content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { results }, jsonOptions) } } };
     }
 
     private static JsonElement? GetId(JsonElement request)

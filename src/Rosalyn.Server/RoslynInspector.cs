@@ -1742,6 +1742,156 @@ internal sealed class RoslynInspector
         return true;
     }
 
+    /// <summary>
+    /// Returns all test methods (decorated with [Fact], [Test], [Theory], or [TestMethod])
+    /// across all .cs files under <paramref name="relativeDirectory"/>.
+    /// </summary>
+    /// <param name="repositoryRoot">Absolute session root path.</param>
+    /// <param name="relativeDirectory">Repository-relative directory to scan.</param>
+    /// <param name="results">Test method results in source order on success.</param>
+    /// <param name="error">Error details on failure.</param>
+    /// <returns><c>true</c> on success; <c>false</c> with <paramref name="error"/> set on failure.</returns>
+    public bool TryFindTestMethods(
+        string repositoryRoot,
+        string relativeDirectory,
+        out IReadOnlyList<TestMethodResult>? results,
+        out string? error)
+    {
+        results = null;
+        error = null;
+
+        var absoluteDir = Path.GetFullPath(Path.Combine(repositoryRoot, relativeDirectory));
+
+        if (!IsWithinAllowedDirectory(absoluteDir))
+        {
+            error = "The provided directory is not within any allowed directory.";
+            return false;
+        }
+
+        if (!Directory.Exists(absoluteDir))
+        {
+            error = $"Directory not found: {relativeDirectory}";
+            return false;
+        }
+
+        var testAttributeNames = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "Fact", "Test", "Theory", "TestMethod"
+        };
+
+        var output = new List<TestMethodResult>();
+
+        foreach (var file in Directory.EnumerateFiles(absoluteDir, "*.cs", SearchOption.AllDirectories)
+                     .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")))
+        {
+            var relPath = Path.GetRelativePath(repositoryRoot, file).Replace('\\', '/');
+            var code = File.ReadAllText(file);
+            var tree = CSharpSyntaxTree.ParseText(code, path: file);
+            var root = (CompilationUnitSyntax)tree.GetRoot();
+
+            foreach (var method in root.DescendantNodes().OfType<MethodDeclarationSyntax>())
+            {
+                var hasTestAttr = method.AttributeLists
+                    .SelectMany(al => al.Attributes)
+                    .Any(a => testAttributeNames.Contains(ExtractSimpleName(a.Name)));
+
+                if (!hasTestAttr) continue;
+
+                var containingType = method.Ancestors()
+                    .OfType<TypeDeclarationSyntax>()
+                    .FirstOrDefault()?.Identifier.Text ?? "<global>";
+
+                var line = tree.GetLineSpan(method.Span).StartLinePosition.Line + 1;
+                output.Add(new TestMethodResult(relPath, line, containingType, method.Identifier.Text));
+            }
+        }
+
+        results = output;
+        return true;
+    }
+
+    /// <summary>
+    /// Returns the XML doc comment for every declaration of a named symbol found under
+    /// <paramref name="relativeDirectory"/>. Multiple results occur for overloads and partial types.
+    /// </summary>
+    /// <param name="repositoryRoot">Absolute session root path.</param>
+    /// <param name="symbolName">Exact symbol name (case-sensitive).</param>
+    /// <param name="relativeDirectory">Repository-relative directory to scan.</param>
+    /// <param name="results">Doc comment results on success.</param>
+    /// <param name="error">Error details on failure.</param>
+    /// <returns><c>true</c> on success; <c>false</c> with <paramref name="error"/> set on failure.</returns>
+    public bool TryGetXmlDoc(
+        string repositoryRoot,
+        string symbolName,
+        string relativeDirectory,
+        out IReadOnlyList<XmlDocResult>? results,
+        out string? error)
+    {
+        results = null;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(symbolName))
+        {
+            error = "Argument 'name' is required.";
+            return false;
+        }
+
+        var absoluteDir = Path.GetFullPath(Path.Combine(repositoryRoot, relativeDirectory));
+
+        if (!IsWithinAllowedDirectory(absoluteDir))
+        {
+            error = "The provided directory is not within any allowed directory.";
+            return false;
+        }
+
+        if (!Directory.Exists(absoluteDir))
+        {
+            error = $"Directory not found: {relativeDirectory}";
+            return false;
+        }
+
+        var output = new List<XmlDocResult>();
+
+        foreach (var file in Directory.EnumerateFiles(absoluteDir, "*.cs", SearchOption.AllDirectories)
+                     .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")))
+        {
+            var relPath = Path.GetRelativePath(repositoryRoot, file).Replace('\\', '/');
+            var code = File.ReadAllText(file);
+            var tree = CSharpSyntaxTree.ParseText(code, path: file);
+            var root = (CompilationUnitSyntax)tree.GetRoot();
+
+            foreach (var node in root.DescendantNodes())
+            {
+                string? name = node switch
+                {
+                    MethodDeclarationSyntax m => m.Identifier.Text,
+                    PropertyDeclarationSyntax p => p.Identifier.Text,
+                    FieldDeclarationSyntax f => f.Declaration.Variables.FirstOrDefault()?.Identifier.Text,
+                    EventDeclarationSyntax e => e.Identifier.Text,
+                    TypeDeclarationSyntax t => t.Identifier.Text,
+                    ConstructorDeclarationSyntax c => c.Identifier.Text,
+                    _ => null
+                };
+
+                if (name != symbolName) continue;
+
+                var docTrivia = node.GetLeadingTrivia()
+                    .Where(t => t.IsKind(SyntaxKind.SingleLineDocumentationCommentTrivia)
+                             || t.IsKind(SyntaxKind.MultiLineDocumentationCommentTrivia))
+                    .ToList();
+
+                if (docTrivia.Count == 0) continue;
+
+                var docText = string.Concat(docTrivia.Select(t => t.ToFullString())).Trim();
+                var line = tree.GetLineSpan(node.Span).StartLinePosition.Line + 1;
+                output.Add(new XmlDocResult(relPath, line, name, docText));
+            }
+        }
+
+        results = output;
+        return true;
+    }
+
     private static bool IsWithinDirectory(string absolutePath, string directory)
     {
         var dirWithSeparator = directory.EndsWith(Path.DirectorySeparatorChar)

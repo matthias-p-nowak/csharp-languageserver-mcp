@@ -907,6 +907,167 @@ public sealed class RoslynInspectorTests
         }
     }
 
+    /// <summary>
+    /// Verifies that TryFindTestMethods returns methods decorated with [Fact] and [Theory].
+    /// </summary>
+    [Fact]
+    public void TryFindTestMethods_ReturnsFact_And_Theory()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "Tests.cs"), @"
+using Xunit;
+public class MyTests {
+    [Fact] public void Test1() {}
+    [Theory] public void Test2(int x) {}
+    public void NotATest() {}
+}");
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryFindTestMethods(repositoryRoot, ".", out var results, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(results);
+            Assert.Equal(2, results!.Count);
+            Assert.Contains(results, r => r.MethodName == "Test1" && r.ContainingType == "MyTests");
+            Assert.Contains(results, r => r.MethodName == "Test2" && r.ContainingType == "MyTests");
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that TryFindTestMethods returns an empty list when no test attributes are present.
+    /// </summary>
+    [Fact]
+    public void TryFindTestMethods_EmptyWhenNoTestAttributes()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "NoTests.cs"), "public class C { public void M() {} }");
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryFindTestMethods(repositoryRoot, ".", out var results, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(results);
+            Assert.Empty(results!);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that TryFindTestMethods returns an error for a missing directory.
+    /// </summary>
+    [Fact]
+    public void TryFindTestMethods_FailsForMissingDirectory()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryFindTestMethods(repositoryRoot, "nonexistent", out var results, out var error);
+
+            Assert.False(success);
+            Assert.Null(results);
+            Assert.NotNull(error);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that TryGetXmlDoc returns the XML doc comment for a named method.
+    /// </summary>
+    [Fact]
+    public void TryGetXmlDoc_ReturnsDocForMethod()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "DocSample.cs"), @"
+public class C {
+    /// <summary>Does something useful.</summary>
+    public void DoWork() {}
+}");
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryGetXmlDoc(repositoryRoot, "DoWork", ".", out var results, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(results);
+            Assert.Single(results!);
+            Assert.Contains("Does something useful", results![0].Doc);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that TryGetXmlDoc returns an empty list when no doc comment exists.
+    /// </summary>
+    [Fact]
+    public void TryGetXmlDoc_ReturnsEmptyWhenNoDoc()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "NoDoc.cs"), "public class C { public void NoComment() {} }");
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryGetXmlDoc(repositoryRoot, "NoComment", ".", out var results, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(results);
+            Assert.Empty(results!);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that TryGetXmlDoc returns doc comments from multiple overloads.
+    /// </summary>
+    [Fact]
+    public void TryGetXmlDoc_ReturnsMultipleForOverloads()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "Overloads.cs"), @"
+public class C {
+    /// <summary>Overload one.</summary>
+    public void Process(int x) {}
+    /// <summary>Overload two.</summary>
+    public void Process(string s) {}
+}");
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryGetXmlDoc(repositoryRoot, "Process", ".", out var results, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(results);
+            Assert.Equal(2, results!.Count);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
     private static string CreateTempRoot()
     {
         var path = Path.Combine(Path.GetTempPath(), "rosalyn-tests-" + Guid.NewGuid().ToString("N"));

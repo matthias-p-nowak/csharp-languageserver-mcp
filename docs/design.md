@@ -24,6 +24,8 @@ Rosalyn is an MCP server built with C#/.NET that provides codebase insight using
 - DR-019 (get_interface_implementations): Expose a `get_interface_implementations` MCP tool that, given an interface name and directory, returns all classes, records, and structs whose base list contains that interface name (matched by simple name). Syntax-only.
 - DR-021 (get_lines): Expose a `get_lines` MCP tool that, given a repository-relative file path, start line, and end line (1-based, inclusive), returns the requested line range as a string. No Roslyn required — pure file I/O. Useful for reading a section of a large file without fetching the whole content.
 - DR-020 (get_call_hierarchy): Expose a `get_call_hierarchy` MCP tool that, given a method name, direction ("up" for callers / "down" for callees), max depth (1–5, default 2), and directory, returns a tree of `CallHierarchyNode` records. Cycle detection prevents infinite recursion. Syntax-only.
+- DR-022 (find_test_methods): Expose a `find_test_methods` MCP tool that, given a directory, returns all test methods decorated with `[Fact]`, `[Test]`, `[Theory]`, or `[TestMethod]`, with file, line, containing type, and method name. Syntax-only.
+- DR-023 (get_xml_doc): Expose a `get_xml_doc` MCP tool that, given a symbol name and directory, returns the XML doc comment for every declaration of that symbol found in `.cs` files under the directory. Multiple results occur for overloads and partial types. Returns empty results when the symbol has no doc comment. Syntax-only.
 
 ## Server startup
 - CLI args are a list of allowed absolute directory paths; no `--root` arg.
@@ -55,6 +57,8 @@ Each tool has its own spec in `docs/tools/<tool-name>.md`. Load only the relevan
 | `get_interface_implementations` | [docs/tools/get_interface_implementations.md](tools/get_interface_implementations.md) |
 | `get_call_hierarchy` | [docs/tools/get_call_hierarchy.md](tools/get_call_hierarchy.md) |
 | `get_lines` | [docs/tools/get_lines.md](tools/get_lines.md) |
+| `find_test_methods` | [docs/tools/find_test_methods.md](tools/find_test_methods.md) |
+| `get_xml_doc` | [docs/tools/get_xml_doc.md](tools/get_xml_doc.md) |
 
 ## MCP transport behavior
 See [docs/handshake.md](handshake.md) for the full transport and handshake spec.
