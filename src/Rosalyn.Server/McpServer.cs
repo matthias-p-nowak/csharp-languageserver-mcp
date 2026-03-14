@@ -23,14 +23,15 @@ internal sealed class McpServer
     private readonly JsonSerializerOptions jsonOptions;
     private MessageFramingMode framingMode;
     private bool exitRequested;
+    private string? sessionRoot;
 
     /// <summary>
-    /// Creates a server bound to one repository root.
+    /// Creates a server with a list of allowed directories.
     /// </summary>
-    /// <param name="repositoryRoot">Absolute repository root path.</param>
-    public McpServer(string repositoryRoot)
+    /// <param name="allowedDirectories">Absolute paths the server may access.</param>
+    public McpServer(string[] allowedDirectories)
     {
-        inspector = new RoslynInspector(Path.GetFullPath(repositoryRoot));
+        inspector = new RoslynInspector(allowedDirectories);
         jsonOptions = new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase
@@ -38,18 +39,17 @@ internal sealed class McpServer
     }
 
     /// <summary>
-    /// Processes MCP JSON-RPC requests until input ends or cancellation is requested.
+    /// Processes MCP JSON-RPC requests until input ends.
     /// </summary>
     /// <param name="input">Input stream carrying MCP messages.</param>
     /// <param name="output">Output stream for MCP responses.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    public async Task RunAsync(Stream input, Stream output, CancellationToken cancellationToken)
+    public async Task RunAsync(Stream input, Stream output)
     {
         using var reader = new StreamReader(input, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
 
-        while (!cancellationToken.IsCancellationRequested)
+        while (true)
         {
-            var payload = await ReadMessageWithFramingAsync(reader, cancellationToken);
+            var payload = await ReadMessageWithFramingAsync(reader);
             if (payload is null)
             {
                 return;
@@ -63,7 +63,7 @@ internal sealed class McpServer
             catch
             {
                 var parseError = CreateErrorResponse(id: null, -32700, "Invalid JSON payload.");
-                await WriteMessageAsync(output, parseError, cancellationToken);
+                await WriteMessageAsync(output, parseError);
                 continue;
             }
 
@@ -72,7 +72,7 @@ internal sealed class McpServer
                 var response = HandleRequest(document.RootElement);
                 if (response is not null)
                 {
-                    await WriteMessageAsync(output, response, cancellationToken);
+                    await WriteMessageAsync(output, response);
                 }
 
                 if (exitRequested)
@@ -189,8 +189,26 @@ internal sealed class McpServer
                 id.Value,
                 new
                 {
-                    tools = new[]
+                    tools = new object[]
                     {
+                        new
+                        {
+                            name = "set_root",
+                            description = "Set the workspace root for this session. Must be called before any analysis tool.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    path = new
+                                    {
+                                        type = "string",
+                                        description = "Absolute path to the workspace root."
+                                    }
+                                },
+                                required = new[] { "path" }
+                            }
+                        },
                         new
                         {
                             name = "roslyn_syntax_summary",
@@ -207,6 +225,29 @@ internal sealed class McpServer
                                     }
                                 },
                                 required = new[] { "path" }
+                            }
+                        },
+                        new
+                        {
+                            name = "roslyn_complexity_report",
+                            description = "Scan all .cs files under a directory and return the top N methods ranked by cyclomatic complexity.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    directory = new
+                                    {
+                                        type = "string",
+                                        description = "Repository-relative path to the directory to scan."
+                                    },
+                                    top_n = new
+                                    {
+                                        type = "integer",
+                                        description = "Maximum number of results to return (default: 20)."
+                                    }
+                                },
+                                required = new[] { "directory" }
                             }
                         }
                     }
@@ -317,34 +358,94 @@ internal sealed class McpServer
             return CreateToolError("Missing tool name.");
         }
 
-        if (!string.Equals(toolName, "roslyn_syntax_summary", StringComparison.Ordinal))
+        if (string.Equals(toolName, "set_root", StringComparison.Ordinal))
         {
-            return CreateToolError($"Unknown tool: {toolName}");
-        }
-
-        if (!TryGetStringProperty(request, out var path, "params", "arguments", "path") || string.IsNullOrWhiteSpace(path))
-        {
-            return CreateToolError("Missing required argument: path");
-        }
-
-        if (!inspector.TrySummarize(path, out var summary, out var error))
-        {
-            return CreateToolError(error ?? "Unknown Roslyn analysis error.");
-        }
-
-        return new
-        {
-            isError = false,
-            structuredContent = summary,
-            content = new[]
+            if (!TryGetStringProperty(request, out var rootPath, "params", "arguments", "path") || string.IsNullOrWhiteSpace(rootPath))
             {
-                new
-                {
-                    type = "text",
-                    text = JsonSerializer.Serialize(summary, jsonOptions)
-                }
+                return CreateToolError("Missing required argument: path");
             }
-        };
+
+            var absoluteRoot = Path.GetFullPath(rootPath);
+            if (!inspector.IsWithinAllowedDirectory(absoluteRoot))
+            {
+                return CreateToolError("The provided path is not within any allowed directory.");
+            }
+
+            sessionRoot = absoluteRoot;
+            return new { isError = false, content = Array.Empty<object>() };
+        }
+
+        if (sessionRoot is null)
+        {
+            return CreateToolError("Root not set. Call set_root before using tools.");
+        }
+
+        if (string.Equals(toolName, "roslyn_syntax_summary", StringComparison.Ordinal))
+        {
+            if (!TryGetStringProperty(request, out var path, "params", "arguments", "path") || string.IsNullOrWhiteSpace(path))
+            {
+                return CreateToolError("Missing required argument: path");
+            }
+
+            if (!inspector.TrySummarize(sessionRoot, path, out var summary, out var error))
+            {
+                return CreateToolError(error ?? "Unknown Roslyn analysis error.");
+            }
+
+            return new
+            {
+                isError = false,
+                structuredContent = summary,
+                content = new[]
+                {
+                    new
+                    {
+                        type = "text",
+                        text = JsonSerializer.Serialize(summary, jsonOptions)
+                    }
+                }
+            };
+        }
+
+        if (string.Equals(toolName, "roslyn_complexity_report", StringComparison.Ordinal))
+        {
+            if (!TryGetStringProperty(request, out var directory, "params", "arguments", "directory") || string.IsNullOrWhiteSpace(directory))
+            {
+                return CreateToolError("Missing required argument: directory");
+            }
+
+            var topN = 20;
+            if (request.TryGetProperty("params", out var p) &&
+                p.TryGetProperty("arguments", out var args) &&
+                args.TryGetProperty("top_n", out var topNElement) &&
+                topNElement.ValueKind == JsonValueKind.Number &&
+                topNElement.TryGetInt32(out var topNParsed) &&
+                topNParsed > 0)
+            {
+                topN = topNParsed;
+            }
+
+            if (!inspector.TryAnalyzeComplexity(sessionRoot, directory, topN, out var results, out var error))
+            {
+                return CreateToolError(error ?? "Unknown complexity analysis error.");
+            }
+
+            return new
+            {
+                isError = false,
+                structuredContent = new { results },
+                content = new[]
+                {
+                    new
+                    {
+                        type = "text",
+                        text = JsonSerializer.Serialize(new { results }, jsonOptions)
+                    }
+                }
+            };
+        }
+
+        return CreateToolError($"Unknown tool: {toolName}");
     }
 
     private static JsonElement? GetId(JsonElement request)
@@ -419,14 +520,12 @@ internal sealed class McpServer
         };
     }
 
-    private async Task<string?> ReadMessageWithFramingAsync(StreamReader reader, CancellationToken cancellationToken)
+    private async Task<string?> ReadMessageWithFramingAsync(StreamReader reader)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-
         string? firstLine;
         do
         {
-            firstLine = await reader.ReadLineAsync(cancellationToken);
+            firstLine = await reader.ReadLineAsync();
         }
         while (firstLine is not null && firstLine.Length == 0);
 
@@ -450,7 +549,7 @@ internal sealed class McpServer
         }
 
         string? line;
-        while ((line = await reader.ReadLineAsync(cancellationToken)) is not null)
+        while ((line = await reader.ReadLineAsync()) is not null)
         {
             if (line.Length == 0)
             {
@@ -473,7 +572,6 @@ internal sealed class McpServer
 
         while (offset < contentLength)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             var read = await reader.ReadAsync(buffer.AsMemory(offset, contentLength - offset));
             if (read == 0)
             {
@@ -498,22 +596,22 @@ internal sealed class McpServer
         return int.TryParse(rawLength, out contentLength) && contentLength > 0;
     }
 
-    private async Task WriteMessageAsync(Stream output, object response, CancellationToken cancellationToken)
+    private async Task WriteMessageAsync(Stream output, object response)
     {
         var payload = JsonSerializer.Serialize(response, jsonOptions);
         var payloadBytes = Encoding.UTF8.GetBytes(payload);
         if (framingMode == MessageFramingMode.LineDelimitedJson)
         {
             var lineBytes = Encoding.UTF8.GetBytes(payload + "\n");
-            await output.WriteAsync(lineBytes, cancellationToken);
-            await output.FlushAsync(cancellationToken);
+            await output.WriteAsync(lineBytes);
+            await output.FlushAsync();
             return;
         }
 
         var headerBytes = Encoding.ASCII.GetBytes($"Content-Length: {payloadBytes.Length}\r\n\r\n");
-        await output.WriteAsync(headerBytes, cancellationToken);
-        await output.WriteAsync(payloadBytes, cancellationToken);
-        await output.FlushAsync(cancellationToken);
+        await output.WriteAsync(headerBytes);
+        await output.WriteAsync(payloadBytes);
+        await output.FlushAsync();
     }
 
 }

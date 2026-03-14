@@ -20,8 +20,8 @@ public sealed class RoslynInspectorTests
             var samplePath = Path.Combine(repositoryRoot, "Sample.cs");
             File.WriteAllText(samplePath, "namespace Demo; public class C { public void M(){} }");
 
-            var inspector = new RoslynInspector(repositoryRoot);
-            var success = inspector.TrySummarize("Sample.cs", out var summary, out var error);
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TrySummarize(repositoryRoot, "Sample.cs", out var summary, out var error);
 
             Assert.True(success);
             Assert.Null(error);
@@ -45,12 +45,75 @@ public sealed class RoslynInspectorTests
         var repositoryRoot = CreateTempRoot();
         try
         {
-            var inspector = new RoslynInspector(repositoryRoot);
-            var success = inspector.TrySummarize("not-csharp.txt", out var summary, out var error);
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TrySummarize(repositoryRoot, "not-csharp.txt", out var summary, out var error);
 
             Assert.False(success);
             Assert.Null(summary);
             Assert.Equal("Only .cs files are supported.", error);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that TryAnalyzeComplexity ranks methods by cyclomatic complexity.
+    /// </summary>
+    [Fact]
+    public void TryAnalyzeComplexity_RanksByComplexityDescending()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            // Simple method: complexity 1. Complex method: complexity 1 + 3 branches = 4.
+            File.WriteAllText(Path.Combine(repositoryRoot, "Sample.cs"), """
+                namespace Demo;
+                public class C
+                {
+                    public void Simple() { }
+                    public void Complex(int x)
+                    {
+                        if (x > 0) { }
+                        else if (x < 0) { }
+                        for (int i = 0; i < x; i++) { }
+                    }
+                }
+                """);
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryAnalyzeComplexity(repositoryRoot, ".", 10, out var results, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(results);
+            Assert.Equal(2, results!.Count);
+            Assert.Equal("Complex", results[0].Method);
+            Assert.Equal("Simple", results[1].Method);
+            Assert.True(results[0].Complexity > results[1].Complexity);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that TryAnalyzeComplexity rejects a directory outside the allowed root.
+    /// </summary>
+    [Fact]
+    public void TryAnalyzeComplexity_RejectsDirectoryOutsideRoot()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryAnalyzeComplexity(repositoryRoot, "../outside", 10, out var results, out var error);
+
+            Assert.False(success);
+            Assert.Null(results);
+            Assert.NotNull(error);
         }
         finally
         {

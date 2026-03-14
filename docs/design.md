@@ -9,13 +9,25 @@ Rosalyn is an MCP server built with C#/.NET that provides codebase insight using
 - DR-003 (dogfooding loop): Use the server on this repository during development and treat discovered gaps as tracked work. Gaps are first noted in `tmp/dogfood.md`; after triage (duplicate check and severity assessment) they are promoted to `docs/issues.md` tagged `[dogfood]` and entered into the shared priority queue.
 - DR-004 (retrieval policy): Prefer this MCP tool for C# code retrieval in this project; use fallback file reads only when the MCP route is not possible.
 - DR-005 (initial insight operation): Expose a `roslyn_syntax_summary` MCP tool that analyzes one C# file and returns declaration-level counts.
+- DR-007 (complexity report): Expose a `roslyn_complexity_report` MCP tool that scans all `.cs` files under a directory and returns the top N methods ranked by cyclomatic complexity.
+
+## Server startup
+- CLI args are a list of allowed absolute directory paths; no `--root` arg.
+- The server rejects file access outside these directories at all times.
+
+## Session root
+- DR-006 (session root): The client must call `set_root` before invoking any analysis tool.
+- `set_root` accepts an absolute path, validates it is within an allowed directory, and stores it for the session.
+- Any tool called before `set_root` returns an error: `"Root not set. Call set_root before using tools."`
 
 ## MCP tool registry
 Each tool has its own spec in `docs/tools/<tool-name>.md`. Load only the relevant file when working on a specific tool.
 
 | Tool | Spec |
 |------|------|
+| `set_root` | [docs/tools/set_root.md](tools/set_root.md) |
 | `roslyn_syntax_summary` | [docs/tools/roslyn_syntax_summary.md](tools/roslyn_syntax_summary.md) |
+| `roslyn_complexity_report` | [docs/tools/roslyn_complexity_report.md](tools/roslyn_complexity_report.md) |
 
 ## MCP transport behavior
 See [docs/handshake.md](handshake.md) for the full transport and handshake spec.
