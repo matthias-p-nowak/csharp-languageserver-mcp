@@ -174,6 +174,173 @@ internal sealed class RoslynInspector
     }
 
     /// <summary>
+    /// Searches all .cs files under <paramref name="relativeDirectory"/> for declarations
+    /// whose name exactly matches <paramref name="symbolName"/>.
+    /// </summary>
+    /// <param name="repositoryRoot">Absolute session root path.</param>
+    /// <param name="symbolName">Exact symbol name to find (case-sensitive).</param>
+    /// <param name="relativeDirectory">Repository-relative directory to scan.</param>
+    /// <param name="matches">Symbol matches on success.</param>
+    /// <param name="error">Error details on failure.</param>
+    /// <returns><c>true</c> on success; otherwise <c>false</c>.</returns>
+    public bool TryFindSymbol(
+        string repositoryRoot,
+        string symbolName,
+        string relativeDirectory,
+        out IReadOnlyList<SymbolMatch>? matches,
+        out string? error)
+    {
+        matches = null;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(symbolName))
+        {
+            error = "Argument 'name' is required.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(relativeDirectory))
+        {
+            error = "Argument 'directory' is required.";
+            return false;
+        }
+
+        var absoluteDir = Path.GetFullPath(Path.Combine(repositoryRoot, relativeDirectory));
+
+        if (!IsWithinDirectory(absoluteDir, repositoryRoot))
+        {
+            error = "The provided directory must be inside the repository root.";
+            return false;
+        }
+
+        if (!IsWithinAllowedDirectory(absoluteDir))
+        {
+            error = "The provided directory is not within any allowed directory.";
+            return false;
+        }
+
+        if (!Directory.Exists(absoluteDir))
+        {
+            error = $"Directory not found: {relativeDirectory}";
+            return false;
+        }
+
+        var results = new List<SymbolMatch>();
+
+        foreach (var filePath in Directory.EnumerateFiles(absoluteDir, "*.cs", SearchOption.AllDirectories))
+        {
+            var source = File.ReadAllText(filePath);
+            var tree = CSharpSyntaxTree.ParseText(source, path: filePath);
+            var root = tree.GetCompilationUnitRoot();
+            var relativeFilePath = Path.GetRelativePath(repositoryRoot, filePath);
+
+            foreach (var (name, kind, span) in GetDeclaredSymbols(root, tree))
+            {
+                if (name == symbolName)
+                {
+                    results.Add(new SymbolMatch(relativeFilePath, span, kind));
+                }
+            }
+        }
+
+        matches = results;
+        return true;
+    }
+
+    /// <summary>
+    /// Returns all named symbols declared in a single repository-relative C# file.
+    /// </summary>
+    /// <param name="repositoryRoot">Absolute session root path.</param>
+    /// <param name="relativePath">Repository-relative path to a .cs file.</param>
+    /// <param name="symbols">Symbols in source order on success.</param>
+    /// <param name="error">Error details on failure.</param>
+    /// <returns><c>true</c> on success; otherwise <c>false</c>.</returns>
+    public bool TryGetDocumentSymbols(
+        string repositoryRoot,
+        string relativePath,
+        out IReadOnlyList<SymbolMatch>? symbols,
+        out string? error)
+    {
+        symbols = null;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(relativePath))
+        {
+            error = "Argument 'path' is required.";
+            return false;
+        }
+
+        if (!relativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+        {
+            error = "Only .cs files are supported.";
+            return false;
+        }
+
+        var absolutePath = Path.GetFullPath(Path.Combine(repositoryRoot, relativePath));
+
+        if (!IsWithinDirectory(absolutePath, repositoryRoot))
+        {
+            error = "The provided path must be inside the repository root.";
+            return false;
+        }
+
+        if (!IsWithinAllowedDirectory(absolutePath))
+        {
+            error = "The provided path is not within any allowed directory.";
+            return false;
+        }
+
+        if (!File.Exists(absolutePath))
+        {
+            error = $"File not found: {relativePath}";
+            return false;
+        }
+
+        var source = File.ReadAllText(absolutePath);
+        var tree = CSharpSyntaxTree.ParseText(source, path: absolutePath);
+        var root = tree.GetCompilationUnitRoot();
+
+        symbols = GetDeclaredSymbols(root, tree)
+            .Select(t => new SymbolMatch(relativePath, t.Line, t.Kind))
+            .ToList();
+
+        return true;
+    }
+
+    /// <summary>
+    /// Enumerates all named declaration nodes in <paramref name="root"/>,
+    /// yielding (name, kind, line) tuples in source order.
+    /// </summary>
+    private static IEnumerable<(string Name, string Kind, int Line)> GetDeclaredSymbols(
+        CompilationUnitSyntax root, SyntaxTree tree)
+    {
+        foreach (var node in root.DescendantNodes())
+        {
+            var (name, kind) = node switch
+            {
+                NamespaceDeclarationSyntax n => (n.Name.ToString(), "Namespace"),
+                FileScopedNamespaceDeclarationSyntax n => (n.Name.ToString(), "Namespace"),
+                ClassDeclarationSyntax n => (n.Identifier.Text, "Class"),
+                RecordDeclarationSyntax n => (n.Identifier.Text, "Record"),
+                StructDeclarationSyntax n => (n.Identifier.Text, "Struct"),
+                InterfaceDeclarationSyntax n => (n.Identifier.Text, "Interface"),
+                EnumDeclarationSyntax n => (n.Identifier.Text, "Enum"),
+                MethodDeclarationSyntax n => (n.Identifier.Text, "Method"),
+                PropertyDeclarationSyntax n => (n.Identifier.Text, "Property"),
+                FieldDeclarationSyntax n => (n.Declaration.Variables.First().Identifier.Text, "Field"),
+                EnumMemberDeclarationSyntax n => (n.Identifier.Text, "EnumMember"),
+                _ => (string.Empty, string.Empty)
+            };
+
+            if (name.Length > 0)
+            {
+                var line = tree.GetLineSpan(node.Span).StartLinePosition.Line + 1;
+                yield return (name, kind, line);
+            }
+        }
+    }
+
+    /// <summary>
     /// Computes cyclomatic complexity for a method: 1 (base) + 1 per branching node.
     /// Branching nodes: if, else if, for, foreach, while, do, case, catch, &amp;&amp;, ||, ??, ?:.
     /// </summary>

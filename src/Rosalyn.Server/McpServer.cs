@@ -229,6 +229,47 @@ internal sealed class McpServer
                         },
                         new
                         {
+                            name = "find_symbol",
+                            description = "Search for a named symbol across all .cs files under a directory. Returns file, line, and kind for each match.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    name = new
+                                    {
+                                        type = "string",
+                                        description = "Exact symbol name to search for (case-sensitive)."
+                                    },
+                                    directory = new
+                                    {
+                                        type = "string",
+                                        description = "Repository-relative directory to scan."
+                                    }
+                                },
+                                required = new[] { "name", "directory" }
+                            }
+                        },
+                        new
+                        {
+                            name = "get_document_symbols",
+                            description = "Return all named symbols in a single .cs file with their kind, name, and line number.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    path = new
+                                    {
+                                        type = "string",
+                                        description = "Repository-relative path to a .cs file."
+                                    }
+                                },
+                                required = new[] { "path" }
+                            }
+                        },
+                        new
+                        {
                             name = "roslyn_complexity_report",
                             description = "Scan all .cs files under a directory and return the top N methods ranked by cyclomatic complexity.",
                             inputSchema = new
@@ -440,6 +481,65 @@ internal sealed class McpServer
                     {
                         type = "text",
                         text = JsonSerializer.Serialize(new { results }, jsonOptions)
+                    }
+                }
+            };
+        }
+
+        if (string.Equals(toolName, "find_symbol", StringComparison.Ordinal))
+        {
+            if (!TryGetStringProperty(request, out var name, "params", "arguments", "name") || string.IsNullOrWhiteSpace(name))
+            {
+                return CreateToolError("Missing required argument: name");
+            }
+
+            if (!TryGetStringProperty(request, out var directory, "params", "arguments", "directory") || string.IsNullOrWhiteSpace(directory))
+            {
+                return CreateToolError("Missing required argument: directory");
+            }
+
+            if (!inspector.TryFindSymbol(sessionRoot, name, directory, out var matches, out var error))
+            {
+                return CreateToolError(error ?? "Unknown symbol search error.");
+            }
+
+            return new
+            {
+                isError = false,
+                structuredContent = new { matches },
+                content = new[]
+                {
+                    new
+                    {
+                        type = "text",
+                        text = JsonSerializer.Serialize(new { matches }, jsonOptions)
+                    }
+                }
+            };
+        }
+
+        if (string.Equals(toolName, "get_document_symbols", StringComparison.Ordinal))
+        {
+            if (!TryGetStringProperty(request, out var path, "params", "arguments", "path") || string.IsNullOrWhiteSpace(path))
+            {
+                return CreateToolError("Missing required argument: path");
+            }
+
+            if (!inspector.TryGetDocumentSymbols(sessionRoot, path, out var symbols, out var error))
+            {
+                return CreateToolError(error ?? "Unknown document symbols error.");
+            }
+
+            return new
+            {
+                isError = false,
+                structuredContent = new { symbols },
+                content = new[]
+                {
+                    new
+                    {
+                        type = "text",
+                        text = JsonSerializer.Serialize(new { symbols }, jsonOptions)
                     }
                 }
             };

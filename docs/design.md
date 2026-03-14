@@ -10,6 +10,8 @@ Rosalyn is an MCP server built with C#/.NET that provides codebase insight using
 - DR-004 (retrieval policy): Prefer this MCP tool for C# code retrieval in this project; use fallback file reads only when the MCP route is not possible.
 - DR-005 (initial insight operation): Expose a `roslyn_syntax_summary` MCP tool that analyzes one C# file and returns declaration-level counts.
 - DR-007 (complexity report): Expose a `roslyn_complexity_report` MCP tool that scans all `.cs` files under a directory and returns the top N methods ranked by cyclomatic complexity.
+- DR-008 (symbol search): Expose a `find_symbol` MCP tool that searches for a named symbol across all `.cs` files under a directory and returns file, line, and kind for each match. Syntax-only.
+- DR-009 (document symbols): Expose a `get_document_symbols` MCP tool that returns all named symbols in a single `.cs` file with their kind, name, and line number. Syntax-only.
 
 ## Server startup
 - CLI args are a list of allowed absolute directory paths; no `--root` arg.
@@ -28,6 +30,8 @@ Each tool has its own spec in `docs/tools/<tool-name>.md`. Load only the relevan
 | `set_root` | [docs/tools/set_root.md](tools/set_root.md) |
 | `roslyn_syntax_summary` | [docs/tools/roslyn_syntax_summary.md](tools/roslyn_syntax_summary.md) |
 | `roslyn_complexity_report` | [docs/tools/roslyn_complexity_report.md](tools/roslyn_complexity_report.md) |
+| `find_symbol` | [docs/tools/find_symbol.md](tools/find_symbol.md) |
+| `get_document_symbols` | [docs/tools/get_document_symbols.md](tools/get_document_symbols.md) |
 
 ## MCP transport behavior
 See [docs/handshake.md](handshake.md) for the full transport and handshake spec.

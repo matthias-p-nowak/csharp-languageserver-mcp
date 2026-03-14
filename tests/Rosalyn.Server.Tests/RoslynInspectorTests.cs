@@ -121,6 +121,73 @@ public sealed class RoslynInspectorTests
         }
     }
 
+    /// <summary>
+    /// Verifies that TryFindSymbol returns matches for a named symbol with correct kind and file.
+    /// </summary>
+    [Fact]
+    public void TryFindSymbol_ReturnsMatchesForNamedSymbol()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "Sample.cs"), """
+                namespace Demo;
+                public class Foo { public void Bar() { } }
+                public class Baz { }
+                """);
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryFindSymbol(repositoryRoot, "Foo", ".", out var matches, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(matches);
+            Assert.Single(matches!);
+            Assert.Equal("Class", matches![0].Kind);
+            Assert.Contains("Sample.cs", matches[0].File);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that TryGetDocumentSymbols returns all declared symbols in source order.
+    /// </summary>
+    [Fact]
+    public void TryGetDocumentSymbols_ReturnsAllSymbolsInOrder()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "Sample.cs"), """
+                namespace Demo;
+                public class MyClass
+                {
+                    public string MyProp { get; set; }
+                    public void MyMethod() { }
+                }
+                """);
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            var success = inspector.TryGetDocumentSymbols(repositoryRoot, "Sample.cs", out var symbols, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(symbols);
+            var kinds = symbols!.Select(s => s.Kind).ToList();
+            Assert.Contains("Namespace", kinds);
+            Assert.Contains("Class", kinds);
+            Assert.Contains("Property", kinds);
+            Assert.Contains("Method", kinds);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
     private static string CreateTempRoot()
     {
         var path = Path.Combine(Path.GetTempPath(), "rosalyn-tests-" + Guid.NewGuid().ToString("N"));
