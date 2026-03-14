@@ -764,15 +764,20 @@ internal sealed class RoslynInspector
             raw = compilation!.GetDiagnostics();
         }
 
+        var objPrefix = repositoryRoot.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar;
+
         diagnostics = raw
-            .Where(d => d.Severity >= DiagnosticSeverity.Warning)
+            .Where(d =>
+            {
+                if (d.Severity < DiagnosticSeverity.Warning || !d.Location.IsInSource) return false;
+                var path = d.Location.GetLineSpan().Path;
+                return !path.StartsWith(objPrefix, StringComparison.OrdinalIgnoreCase);
+            })
             .Select(d =>
             {
-                var loc = d.Location.IsInSource ? d.Location.GetLineSpan() : default;
-                var file = d.Location.IsInSource
-                    ? Path.GetRelativePath(repositoryRoot, loc.Path)
-                    : string.Empty;
-                var diagLine = d.Location.IsInSource ? loc.StartLinePosition.Line + 1 : 0;
+                var loc = d.Location.GetLineSpan();
+                var file = Path.GetRelativePath(repositoryRoot, loc.Path);
+                var diagLine = loc.StartLinePosition.Line + 1;
                 return new SemanticDiagnostic(file, diagLine, d.Severity.ToString(), d.Id, d.GetMessage());
             })
             .ToList();
