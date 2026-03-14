@@ -188,6 +188,118 @@ public sealed class RoslynInspectorTests
         }
     }
 
+    /// <summary>
+    /// Verifies that LoadProjects discovers a .csproj and exposes it as a known project.
+    /// </summary>
+    [Fact]
+    public void LoadProjects_DiscoversProject()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "Demo.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(Path.Combine(repositoryRoot, "Sample.cs"), "namespace Demo; public class C { }");
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            inspector.LoadProjects(repositoryRoot);
+
+            Assert.NotNull(inspector.KnownProjects);
+            Assert.Single(inspector.KnownProjects!);
+            Assert.Contains("Demo.csproj", inspector.KnownProjects![0]);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that TryFindReferences returns a usage site for a resolved symbol.
+    /// </summary>
+    [Fact]
+    public void TryFindReferences_ReturnsUsageSites()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "Demo.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(Path.Combine(repositoryRoot, "Sample.cs"), """
+                namespace Demo;
+                public class Foo { }
+                public class Bar { public Foo Create() => new Foo(); }
+                """);
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            inspector.LoadProjects(repositoryRoot);
+
+            var success = inspector.TryFindReferences(repositoryRoot, "Foo", null, out var refs, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(refs);
+            Assert.True(refs!.Count > 0);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that TryGetSemanticDiagnostics returns an error for undefined identifier.
+    /// </summary>
+    [Fact]
+    public void TryGetSemanticDiagnostics_ReturnsErrorForUndefinedSymbol()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "Demo.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(Path.Combine(repositoryRoot, "Sample.cs"), """
+                namespace Demo;
+                public class C { public void M() { var x = UndefinedType.Create(); } }
+                """);
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            inspector.LoadProjects(repositoryRoot);
+
+            var success = inspector.TryGetSemanticDiagnostics(repositoryRoot, null, null, out var diagnostics, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(diagnostics);
+            Assert.Contains(diagnostics!, d => d.Severity == "Error");
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that TryFindReferences fails gracefully when no projects are loaded.
+    /// </summary>
+    [Fact]
+    public void TryFindReferences_FailsWhenNoProjectsLoaded()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            var inspector = new RoslynInspector([repositoryRoot]);
+            // LoadProjects not called
+
+            var success = inspector.TryFindReferences(repositoryRoot, "Foo", null, out var refs, out var error);
+
+            Assert.False(success);
+            Assert.Null(refs);
+            Assert.NotNull(error);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
     private static string CreateTempRoot()
     {
         var path = Path.Combine(Path.GetTempPath(), "rosalyn-tests-" + Guid.NewGuid().ToString("N"));

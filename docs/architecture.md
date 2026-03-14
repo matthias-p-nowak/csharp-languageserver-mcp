@@ -7,6 +7,8 @@
 - `src/Rosalyn.Server/SyntaxSummary.cs`: typed output contract for declaration counts.
 - `src/Rosalyn.Server/ComplexityResult.cs`: typed output contract for per-method complexity entries.
 - `src/Rosalyn.Server/SymbolMatch.cs`: typed output contract for symbol search and document symbol results.
+- `src/Rosalyn.Server/ReferenceMatch.cs`: typed output contract for `find_references` usage sites.
+- `src/Rosalyn.Server/SemanticDiagnostic.cs`: typed output contract for `get_semantic_diagnostics`.
 
 ## Implemented tools
 Tool specs live in `docs/tools/<tool-name>.md`. See the registry in `docs/design.md`.
@@ -18,6 +20,15 @@ Tool specs live in `docs/tools/<tool-name>.md`. See the registry in `docs/design
 | `roslyn_complexity_report` | [docs/tools/roslyn_complexity_report.md](tools/roslyn_complexity_report.md) |
 | `find_symbol` | [docs/tools/find_symbol.md](tools/find_symbol.md) |
 | `get_document_symbols` | [docs/tools/get_document_symbols.md](tools/get_document_symbols.md) |
+| `find_references` | [docs/tools/find_references.md](tools/find_references.md) |
+| `get_symbol_definition` | [docs/tools/get_symbol_definition.md](tools/get_symbol_definition.md) |
+| `get_semantic_diagnostics` | [docs/tools/get_semantic_diagnostics.md](tools/get_semantic_diagnostics.md) |
+
+## Semantic compilation
+- On `set_root`, `RoslynInspector.LoadProjects` discovers all `.csproj` files under the session root.
+- For each project, `obj/**/*.dll` files are loaded as `MetadataReference`s; all `.cs` files in the project directory are parsed into `SyntaxTree`s.
+- One `CSharpCompilation` per project is built in-memory and cached for the session lifetime.
+- Semantic tools resolve a project by relative `.csproj` path (`project` argument). If omitted and exactly one project exists, it is used automatically. If multiple projects exist, the tool returns an error listing available keys.
 
 ## Constraints
 - Runtime target: .NET 9 console application.

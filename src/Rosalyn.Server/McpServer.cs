@@ -290,6 +290,52 @@ internal sealed class McpServer
                                 },
                                 required = new[] { "directory" }
                             }
+                        },
+                        new
+                        {
+                            name = "find_references",
+                            description = "Find all usage sites of a named symbol across a project. Requires semantic compilation.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    name = new { type = "string", description = "Exact symbol name to find references for." },
+                                    project = new { type = "string", description = "Repository-relative .csproj path. Optional when only one project exists." }
+                                },
+                                required = new[] { "name" }
+                            }
+                        },
+                        new
+                        {
+                            name = "get_symbol_definition",
+                            description = "Return the definition site of the symbol at a given file and line. Requires semantic compilation.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    path = new { type = "string", description = "Repository-relative path to the .cs file." },
+                                    line = new { type = "integer", description = "1-based line number." },
+                                    project = new { type = "string", description = "Repository-relative .csproj path. Optional when only one project exists." }
+                                },
+                                required = new[] { "path", "line" }
+                            }
+                        },
+                        new
+                        {
+                            name = "get_semantic_diagnostics",
+                            description = "Return compiler errors and warnings for a .cs file or whole project. Requires semantic compilation.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    path = new { type = "string", description = "Repository-relative .cs file path. Optional; omit for project-wide diagnostics." },
+                                    project = new { type = "string", description = "Repository-relative .csproj path. Optional when only one project exists." }
+                                },
+                                required = Array.Empty<string>()
+                            }
                         }
                     }
                 });
@@ -413,6 +459,7 @@ internal sealed class McpServer
             }
 
             sessionRoot = absoluteRoot;
+            inspector.LoadProjects(absoluteRoot);
             return new { isError = false, content = Array.Empty<object>() };
         }
 
@@ -542,6 +589,83 @@ internal sealed class McpServer
                         text = JsonSerializer.Serialize(new { symbols }, jsonOptions)
                     }
                 }
+            };
+        }
+
+        if (string.Equals(toolName, "find_references", StringComparison.Ordinal))
+        {
+            if (!TryGetStringProperty(request, out var name, "params", "arguments", "name") || string.IsNullOrWhiteSpace(name))
+            {
+                return CreateToolError("Missing required argument: name");
+            }
+
+            TryGetStringProperty(request, out var project, "params", "arguments", "project");
+
+            if (!inspector.TryFindReferences(sessionRoot, name, project, out var refs, out var error))
+            {
+                return CreateToolError(error ?? "Unknown find_references error.");
+            }
+
+            return new
+            {
+                isError = false,
+                structuredContent = new { references = refs },
+                content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { references = refs }, jsonOptions) } }
+            };
+        }
+
+        if (string.Equals(toolName, "get_symbol_definition", StringComparison.Ordinal))
+        {
+            if (!TryGetStringProperty(request, out var path, "params", "arguments", "path") || string.IsNullOrWhiteSpace(path))
+            {
+                return CreateToolError("Missing required argument: path");
+            }
+
+            var line = 0;
+            if (request.TryGetProperty("params", out var p2) &&
+                p2.TryGetProperty("arguments", out var args2) &&
+                args2.TryGetProperty("line", out var lineEl) &&
+                lineEl.ValueKind == JsonValueKind.Number &&
+                lineEl.TryGetInt32(out var parsedLine))
+            {
+                line = parsedLine;
+            }
+
+            if (line <= 0)
+            {
+                return CreateToolError("Missing or invalid required argument: line");
+            }
+
+            TryGetStringProperty(request, out var project, "params", "arguments", "project");
+
+            if (!inspector.TryGetSymbolDefinition(sessionRoot, path, line, project, out var definition, out var error))
+            {
+                return CreateToolError(error ?? "Unknown get_symbol_definition error.");
+            }
+
+            return new
+            {
+                isError = false,
+                structuredContent = definition,
+                content = new[] { new { type = "text", text = JsonSerializer.Serialize(definition, jsonOptions) } }
+            };
+        }
+
+        if (string.Equals(toolName, "get_semantic_diagnostics", StringComparison.Ordinal))
+        {
+            TryGetStringProperty(request, out var path, "params", "arguments", "path");
+            TryGetStringProperty(request, out var project, "params", "arguments", "project");
+
+            if (!inspector.TryGetSemanticDiagnostics(sessionRoot, path, project, out var diagnostics, out var error))
+            {
+                return CreateToolError(error ?? "Unknown get_semantic_diagnostics error.");
+            }
+
+            return new
+            {
+                isError = false,
+                structuredContent = new { diagnostics },
+                content = new[] { new { type = "text", text = JsonSerializer.Serialize(new { diagnostics }, jsonOptions) } }
             };
         }
 

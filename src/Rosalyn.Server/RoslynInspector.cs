@@ -5,11 +5,17 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 namespace Rosalyn.Server;
 
 /// <summary>
-/// Performs Roslyn-backed syntax analysis for C# files.
+/// Performs Roslyn-backed syntax and semantic analysis for C# files.
 /// </summary>
 internal sealed class RoslynInspector
 {
     private readonly string[] allowedDirectories;
+
+    /// <summary>Key: absolute .csproj path. Value: loaded compilation.</summary>
+    private Dictionary<string, CSharpCompilation>? projectCompilations;
+
+    /// <summary>Key: absolute .csproj path. Value: syntax trees in that project.</summary>
+    private Dictionary<string, IReadOnlyList<SyntaxTree>>? projectTrees;
 
     /// <summary>
     /// Creates a new inspector restricted to the given allowed directories.
@@ -19,6 +25,62 @@ internal sealed class RoslynInspector
     {
         this.allowedDirectories = allowedDirectories;
     }
+
+    /// <summary>
+    /// Discovers all .csproj files under <paramref name="sessionRoot"/>, loads their
+    /// obj/**/*.dll reference assemblies, and builds an in-memory
+    /// <see cref="CSharpCompilation"/> per project. Results are cached for the session.
+    /// </summary>
+    /// <param name="sessionRoot">Absolute session root path.</param>
+    public void LoadProjects(string sessionRoot)
+    {
+        var compilations = new Dictionary<string, CSharpCompilation>(StringComparer.OrdinalIgnoreCase);
+        var trees = new Dictionary<string, IReadOnlyList<SyntaxTree>>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var csproj in Directory.EnumerateFiles(sessionRoot, "*.csproj", SearchOption.AllDirectories))
+        {
+            var projectDir = Path.GetDirectoryName(csproj)!;
+            var objDir = Path.Combine(projectDir, "obj");
+
+            var references = new List<MetadataReference>();
+            if (Directory.Exists(objDir))
+            {
+                foreach (var dll in Directory.EnumerateFiles(objDir, "*.dll", SearchOption.AllDirectories))
+                {
+                    try { references.Add(MetadataReference.CreateFromFile(dll)); }
+                    catch { /* skip unreadable assemblies */ }
+                }
+            }
+
+            var syntaxTrees = new List<SyntaxTree>();
+            foreach (var cs in Directory.EnumerateFiles(projectDir, "*.cs", SearchOption.AllDirectories))
+            {
+                var source = File.ReadAllText(cs);
+                syntaxTrees.Add(CSharpSyntaxTree.ParseText(source, path: cs));
+            }
+
+            var assemblyName = Path.GetFileNameWithoutExtension(csproj);
+            var compilation = CSharpCompilation.Create(
+                assemblyName,
+                syntaxTrees,
+                references,
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+            var relativeCsproj = Path.GetRelativePath(sessionRoot, csproj);
+            compilations[relativeCsproj] = compilation;
+            trees[relativeCsproj] = syntaxTrees;
+        }
+
+        projectCompilations = compilations;
+        projectTrees = trees;
+    }
+
+    /// <summary>
+    /// Returns the list of known project keys (relative .csproj paths).
+    /// Returns null if <see cref="LoadProjects"/> has not been called yet.
+    /// </summary>
+    public IReadOnlyList<string>? KnownProjects =>
+        projectCompilations is null ? null : projectCompilations.Keys.ToList();
 
     /// <summary>
     /// Returns true when <paramref name="absolutePath"/> is within any allowed directory.
@@ -302,6 +364,253 @@ internal sealed class RoslynInspector
 
         symbols = GetDeclaredSymbols(root, tree)
             .Select(t => new SymbolMatch(relativePath, t.Line, t.Kind))
+            .ToList();
+
+        return true;
+    }
+
+    /// <summary>
+    /// Resolves a <see cref="CSharpCompilation"/> given an optional relative .csproj hint.
+    /// Returns false and sets <paramref name="error"/> when the project cannot be resolved.
+    /// </summary>
+    private bool TryResolveCompilation(
+        string? relativeProject,
+        out CSharpCompilation? compilation,
+        out string? error)
+    {
+        compilation = null;
+        error = null;
+
+        if (projectCompilations is null)
+        {
+            error = "No projects loaded. Ensure set_root was called successfully.";
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(relativeProject))
+        {
+            if (!projectCompilations.TryGetValue(relativeProject, out compilation))
+            {
+                error = $"Project not found: {relativeProject}. Known projects: {string.Join(", ", projectCompilations.Keys)}";
+                return false;
+            }
+
+            return true;
+        }
+
+        if (projectCompilations.Count == 1)
+        {
+            compilation = projectCompilations.Values.First();
+            return true;
+        }
+
+        if (projectCompilations.Count == 0)
+        {
+            error = "No .csproj files found under the session root.";
+            return false;
+        }
+
+        error = $"Multiple projects found. Specify 'project': {string.Join(", ", projectCompilations.Keys)}";
+        return false;
+    }
+
+    /// <summary>
+    /// Finds all usage sites of <paramref name="symbolName"/> across the resolved project.
+    /// </summary>
+    /// <param name="repositoryRoot">Absolute session root path.</param>
+    /// <param name="symbolName">Exact symbol name to find references for.</param>
+    /// <param name="relativeProject">Optional relative .csproj path to select project.</param>
+    /// <param name="references">Reference matches on success.</param>
+    /// <param name="error">Error details on failure.</param>
+    /// <returns><c>true</c> on success; otherwise <c>false</c>.</returns>
+    public bool TryFindReferences(
+        string repositoryRoot,
+        string symbolName,
+        string? relativeProject,
+        out IReadOnlyList<ReferenceMatch>? references,
+        out string? error)
+    {
+        references = null;
+
+        if (!TryResolveCompilation(relativeProject, out var compilation, out error))
+        {
+            return false;
+        }
+
+        var results = new List<ReferenceMatch>();
+
+        foreach (var tree in compilation!.SyntaxTrees)
+        {
+            var root = tree.GetCompilationUnitRoot();
+            var model = compilation.GetSemanticModel(tree);
+            var relativeFile = Path.GetRelativePath(repositoryRoot, tree.FilePath);
+
+            foreach (var node in root.DescendantNodes())
+            {
+                string? nodeName = node switch
+                {
+                    IdentifierNameSyntax id => id.Identifier.Text,
+                    MemberAccessExpressionSyntax ma => ma.Name.Identifier.Text,
+                    _ => null
+                };
+
+                if (nodeName != symbolName)
+                {
+                    continue;
+                }
+
+                var symbolInfo = model.GetSymbolInfo(node);
+                if (symbolInfo.Symbol is null && symbolInfo.CandidateSymbols.IsEmpty)
+                {
+                    continue;
+                }
+
+                var line = tree.GetLineSpan(node.Span).StartLinePosition.Line + 1;
+                var lineText = tree.GetText().Lines[line - 1].ToString().Trim();
+                results.Add(new ReferenceMatch(relativeFile, line, lineText));
+            }
+        }
+
+        references = results;
+        return true;
+    }
+
+    /// <summary>
+    /// Returns the definition site of the symbol at the given file and line number.
+    /// </summary>
+    /// <param name="repositoryRoot">Absolute session root path.</param>
+    /// <param name="relativePath">Repository-relative path to the .cs file.</param>
+    /// <param name="line">1-based line number.</param>
+    /// <param name="relativeProject">Optional relative .csproj path to select project.</param>
+    /// <param name="definition">Definition site on success.</param>
+    /// <param name="error">Error details on failure.</param>
+    /// <returns><c>true</c> on success; otherwise <c>false</c>.</returns>
+    public bool TryGetSymbolDefinition(
+        string repositoryRoot,
+        string relativePath,
+        int line,
+        string? relativeProject,
+        out SymbolMatch? definition,
+        out string? error)
+    {
+        definition = null;
+
+        if (!TryResolveCompilation(relativeProject, out var compilation, out error))
+        {
+            return false;
+        }
+
+        var absolutePath = Path.GetFullPath(Path.Combine(repositoryRoot, relativePath));
+        var tree = compilation!.SyntaxTrees.FirstOrDefault(t =>
+            string.Equals(t.FilePath, absolutePath, StringComparison.OrdinalIgnoreCase));
+
+        if (tree is null)
+        {
+            error = $"File not found in project: {relativePath}";
+            return false;
+        }
+
+        var text = tree.GetText();
+        if (line < 1 || line > text.Lines.Count)
+        {
+            error = $"Line {line} is out of range (file has {text.Lines.Count} lines).";
+            return false;
+        }
+
+        // Find the first named node on the given line.
+        var lineSpan = text.Lines[line - 1].Span;
+        var root = tree.GetCompilationUnitRoot();
+        var model = compilation.GetSemanticModel(tree);
+
+        var node = root.DescendantNodes(lineSpan)
+            .OfType<IdentifierNameSyntax>()
+            .FirstOrDefault();
+
+        if (node is null)
+        {
+            error = $"No identifier found on line {line}.";
+            return false;
+        }
+
+        var symbolInfo = model.GetSymbolInfo(node);
+        var symbol = symbolInfo.Symbol ?? symbolInfo.CandidateSymbols.FirstOrDefault();
+
+        if (symbol is null)
+        {
+            error = $"Could not resolve symbol on line {line}.";
+            return false;
+        }
+
+        var loc = symbol.Locations.FirstOrDefault(l => l.IsInSource);
+        if (loc is null)
+        {
+            error = "Symbol has no source location (may be from a referenced assembly).";
+            return false;
+        }
+
+        var defLine = loc.GetLineSpan().StartLinePosition.Line + 1;
+        var defFile = Path.GetRelativePath(repositoryRoot, loc.SourceTree!.FilePath);
+        var defKind = symbol.Kind.ToString();
+
+        definition = new SymbolMatch(defFile, defLine, defKind);
+        return true;
+    }
+
+    /// <summary>
+    /// Returns compiler diagnostics for a file or the entire project.
+    /// </summary>
+    /// <param name="repositoryRoot">Absolute session root path.</param>
+    /// <param name="relativePath">Optional repository-relative .cs file path; if null, returns project-wide diagnostics.</param>
+    /// <param name="relativeProject">Optional relative .csproj path to select project.</param>
+    /// <param name="diagnostics">Diagnostics on success.</param>
+    /// <param name="error">Error details on failure.</param>
+    /// <returns><c>true</c> on success; otherwise <c>false</c>.</returns>
+    public bool TryGetSemanticDiagnostics(
+        string repositoryRoot,
+        string? relativePath,
+        string? relativeProject,
+        out IReadOnlyList<SemanticDiagnostic>? diagnostics,
+        out string? error)
+    {
+        diagnostics = null;
+
+        if (!TryResolveCompilation(relativeProject, out var compilation, out error))
+        {
+            return false;
+        }
+
+        IEnumerable<Diagnostic> raw;
+
+        if (!string.IsNullOrWhiteSpace(relativePath))
+        {
+            var absolutePath = Path.GetFullPath(Path.Combine(repositoryRoot, relativePath));
+            var tree = compilation!.SyntaxTrees.FirstOrDefault(t =>
+                string.Equals(t.FilePath, absolutePath, StringComparison.OrdinalIgnoreCase));
+
+            if (tree is null)
+            {
+                error = $"File not found in project: {relativePath}";
+                return false;
+            }
+
+            raw = compilation.GetSemanticModel(tree).GetDiagnostics();
+        }
+        else
+        {
+            raw = compilation!.GetDiagnostics();
+        }
+
+        diagnostics = raw
+            .Where(d => d.Severity >= DiagnosticSeverity.Warning)
+            .Select(d =>
+            {
+                var loc = d.Location.IsInSource ? d.Location.GetLineSpan() : default;
+                var file = d.Location.IsInSource
+                    ? Path.GetRelativePath(repositoryRoot, loc.Path)
+                    : string.Empty;
+                var diagLine = d.Location.IsInSource ? loc.StartLinePosition.Line + 1 : 0;
+                return new SemanticDiagnostic(file, diagLine, d.Severity.ToString(), d.Id, d.GetMessage());
+            })
             .ToList();
 
         return true;
