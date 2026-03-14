@@ -78,7 +78,9 @@ internal sealed class RoslynInspector
                 assemblyName,
                 syntaxTrees,
                 references,
-                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+                new CSharpCompilationOptions(
+                    OutputKind.DynamicallyLinkedLibrary,
+                    nullableContextOptions: NullableContextOptions.Enable));
 
             var relativeCsproj = Path.GetRelativePath(sessionRoot, csproj);
             compilations[relativeCsproj] = compilation;
