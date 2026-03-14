@@ -23,3 +23,13 @@ Tool: `roslyn_complexity_report`, directory: `src`, top_n: 15
 ### Gaps / issues to triage
 
 - None identified.
+
+---
+
+## 2026-03-14 — get_semantic_diagnostics on src/Rosalyn.Server
+
+### Findings (resolved)
+
+- BCL ref pack fix: resolved — SDK ref assemblies loaded via `dotnet --info`.
+- ISS-002 (duplicate attributes): resolved — `.cs` files under `obj/` are excluded.
+- ISS-003 (duplicate find_references hits): resolved — same `obj/` exclusion fix.
