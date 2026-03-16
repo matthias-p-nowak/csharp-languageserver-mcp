@@ -33,3 +33,30 @@ Tool: `roslyn_complexity_report`, directory: `src`, top_n: 15
 - BCL ref pack fix: resolved — SDK ref assemblies loaded via `dotnet --info`.
 - ISS-002 (duplicate attributes): resolved — `.cs` files under `obj/` are excluded.
 - ISS-003 (duplicate find_references hits): resolved — same `obj/` exclusion fix.
+
+---
+
+## 2026-03-16 — set_root MCP result shape
+
+### Findings (resolved)
+
+- `set_root` was the only success path without `structuredContent`, while the Codex MCP bridge expects a structured tool result payload.
+- Success shape aligned to `{ "isError": false, "structuredContent": {}, "content": [] }` and covered by a server-level regression test.
+
+---
+
+## 2026-03-16 — semantic diagnostics BCL refs
+
+### Findings (resolved)
+
+- `get_semantic_diagnostics` loaded BCL metadata from `shared/Microsoft.NETCore.App`, which caused widespread missing-type errors in semantic compilation.
+- Reference resolution now uses `packs/Microsoft.NETCore.App.Ref/<version>/ref/net*`, matching the documented architecture and producing clean diagnostics for a valid test project.
+
+---
+
+## 2026-03-16 — hosted MCP dotnet discovery
+
+### Findings (resolved)
+
+- The hosted MCP process could reproduce missing-BCL diagnostics when `dotnet` was not discoverable on `PATH`.
+- Reference-pack discovery now accepts a `DOTNET_EXE` environment override and also probes well-known install paths before falling back to `PATH`.

@@ -92,17 +92,24 @@ internal sealed class RoslynInspector
     }
 
     /// <summary>
-    /// Resolves BCL reference assemblies from the .NET shared runtime folder
-    /// (<c>shared/Microsoft.NETCore.App/&lt;version&gt;/</c>).
-    /// Locates the dotnet root via <c>dotnet --info</c>.
-    /// Returns an empty list if the runtime folder cannot be found.
+    /// Resolves BCL reference assemblies from the .NET reference pack folder
+    /// (<c>packs/Microsoft.NETCore.App.Ref/&lt;version&gt;/ref/net*/</c>).
+    /// Locates the dotnet root via a configured <c>DOTNET_EXE</c> override or a discovered
+    /// <c>dotnet</c> executable.
+    /// Returns an empty list if the reference pack folder cannot be found.
     /// </summary>
     private static IReadOnlyList<MetadataReference> ResolveBclReferences()
     {
         try
         {
-            // Get SDK base path, e.g. /usr/lib64/dotnet-sdk-9.0/sdk/9.0.111/
-            var info = RunProcess("dotnet", "--info");
+            var dotnetExecutable = ResolveDotnetExecutablePath();
+            if (string.IsNullOrWhiteSpace(dotnetExecutable))
+            {
+                return Array.Empty<MetadataReference>();
+            }
+
+            // Get SDK base path, e.g. C:\Program Files\dotnet\sdk\9.0.312\
+            var info = RunProcess(dotnetExecutable, "--info");
             var basePath = info
                 .Split('\n')
                 .Select(l => l.Trim())
@@ -117,25 +124,41 @@ internal sealed class RoslynInspector
 
             // Walk up to dotnet root: .../sdk/9.0.111/ -> .../
             var sdkRoot = Path.GetFullPath(Path.Combine(basePath, "..", ".."));
-            var sharedDir = Path.Combine(sdkRoot, "shared", "Microsoft.NETCore.App");
+            var refPackRoot = Path.Combine(sdkRoot, "packs", "Microsoft.NETCore.App.Ref");
 
-            if (!Directory.Exists(sharedDir))
+            if (!Directory.Exists(refPackRoot))
             {
                 return Array.Empty<MetadataReference>();
             }
 
-            // Pick highest version directory.
-            var runtimeDir = Directory.EnumerateDirectories(sharedDir)
+            // Pick highest available reference pack version.
+            var packDir = Directory.EnumerateDirectories(refPackRoot)
                 .OrderByDescending(d => d)
                 .FirstOrDefault();
 
-            if (runtimeDir is null || !Directory.Exists(runtimeDir))
+            if (packDir is null || !Directory.Exists(packDir))
+            {
+                return Array.Empty<MetadataReference>();
+            }
+
+            var refDirRoot = Path.Combine(packDir, "ref");
+            if (!Directory.Exists(refDirRoot))
+            {
+                return Array.Empty<MetadataReference>();
+            }
+
+            // Prefer the highest target framework folder under ref/, e.g. net9.0.
+            var refDir = Directory.EnumerateDirectories(refDirRoot)
+                .OrderByDescending(d => d)
+                .FirstOrDefault();
+
+            if (refDir is null || !Directory.Exists(refDir))
             {
                 return Array.Empty<MetadataReference>();
             }
 
             var refs = new List<MetadataReference>();
-            foreach (var dll in Directory.EnumerateFiles(runtimeDir, "*.dll"))
+            foreach (var dll in Directory.EnumerateFiles(refDir, "*.dll"))
             {
                 try { refs.Add(MetadataReference.CreateFromFile(dll)); }
                 catch { /* skip unreadable */ }
@@ -147,6 +170,59 @@ internal sealed class RoslynInspector
         {
             return Array.Empty<MetadataReference>();
         }
+    }
+
+    /// <summary>
+    /// Resolves the <c>dotnet</c> executable path from the <c>DOTNET_EXE</c> environment
+    /// variable, known installation paths, or the ambient process <c>PATH</c>.
+    /// </summary>
+    /// <returns>
+    /// An executable path or command name suitable for <see cref="RunProcess(string, string)"/>,
+    /// or <see langword="null"/> when no usable candidate can be found.
+    /// </returns>
+    private static string? ResolveDotnetExecutablePath()
+    {
+        var configuredPath = Environment.GetEnvironmentVariable("DOTNET_EXE");
+        if (!string.IsNullOrWhiteSpace(configuredPath))
+        {
+            return File.Exists(configuredPath) ? configuredPath : null;
+        }
+
+        foreach (var candidate in GetDefaultDotnetCandidates())
+        {
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return "dotnet";
+    }
+
+    /// <summary>
+    /// Returns platform-specific default <c>dotnet</c> installation paths to probe before
+    /// falling back to the ambient process <c>PATH</c>.
+    /// </summary>
+    private static IEnumerable<string> GetDefaultDotnetCandidates()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            yield return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                "dotnet",
+                "dotnet.exe");
+
+            yield return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                "dotnet",
+                "dotnet.exe");
+
+            yield break;
+        }
+
+        yield return "/usr/bin/dotnet";
+        yield return "/usr/local/bin/dotnet";
+        yield return "/usr/share/dotnet/dotnet";
     }
 
     /// <summary>
@@ -1129,7 +1205,7 @@ internal sealed class RoslynInspector
                 files = trees
                     .Where(t => !string.IsNullOrWhiteSpace(t.FilePath))
                     .Select(t => Path.GetRelativePath(repositoryRoot, t.FilePath))
-                    .Where(p => !p.StartsWith("obj" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                    .Where(p => !IsUnderObjTree(p))
                     .ToList();
                 return true;
             }
@@ -1140,7 +1216,7 @@ internal sealed class RoslynInspector
                 files = trees
                     .Where(t => !string.IsNullOrWhiteSpace(t.FilePath))
                     .Select(t => Path.GetRelativePath(repositoryRoot, t.FilePath))
-                    .Where(p => !p.StartsWith("obj" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                    .Where(p => !IsUnderObjTree(p))
                     .ToList();
                 return true;
             }
@@ -1163,6 +1239,18 @@ internal sealed class RoslynInspector
             .Select(cs => Path.GetRelativePath(repositoryRoot, cs))
             .ToList();
         return true;
+    }
+
+    /// <summary>
+    /// Returns whether a repository-relative path lives under an <c>obj</c> tree.
+    /// </summary>
+    /// <param name="relativePath">Repository-relative file path.</param>
+    /// <returns><c>true</c> when any path segment is <c>obj</c>; otherwise <c>false</c>.</returns>
+    private static bool IsUnderObjTree(string relativePath)
+    {
+        return relativePath
+            .Split(['\\', '/'], StringSplitOptions.RemoveEmptyEntries)
+            .Contains("obj", StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>

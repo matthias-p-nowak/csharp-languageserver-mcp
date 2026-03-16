@@ -684,7 +684,7 @@ internal sealed class McpServer
             return CreateToolError("The provided path is not within any allowed directory.");
         sessionRoot = absoluteRoot;
         inspector.LoadProjects(absoluteRoot);
-        return new { isError = false, content = Array.Empty<object>() };
+        return new { isError = false, structuredContent = new { }, content = Array.Empty<object>() };
     }
 
     private object HandleRoslynSyntaxSummary(JsonElement request)

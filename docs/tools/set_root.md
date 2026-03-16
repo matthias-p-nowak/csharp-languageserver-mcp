@@ -4,7 +4,11 @@
 Absolute path to the workspace root.
 
 ## Output
-Empty result `{}` on success.
+Successful MCP tool result with empty structured content:
+
+```json
+{ "isError": false, "structuredContent": {}, "content": [] }
+```
 
 ## Behavior
 - Validates that the path is within one of the server's allowed directories.

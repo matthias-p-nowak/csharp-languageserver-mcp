@@ -332,6 +332,66 @@ public sealed class RoslynInspectorTests
     }
 
     /// <summary>
+    /// Verifies that semantic diagnostics are clean for a valid project when BCL references resolve correctly.
+    /// </summary>
+    [Fact]
+    public void TryGetSemanticDiagnostics_ValidProject_ReturnsNoDiagnostics()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(repositoryRoot, "Demo.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(
+                Path.Combine(repositoryRoot, "Sample.cs"),
+                """
+                namespace Demo;
+                public class C
+                {
+                    public string Name => string.Empty;
+                }
+                """);
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            inspector.LoadProjects(repositoryRoot);
+
+            var success = inspector.TryGetSemanticDiagnostics(repositoryRoot, null, null, out var diagnostics, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(diagnostics);
+            Assert.Empty(diagnostics!);
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that the DOTNET_EXE environment override is preferred for dotnet discovery.
+    /// </summary>
+    [Fact]
+    public void ResolveDotnetExecutablePath_PrefersDotnetExeEnvironmentVariable()
+    {
+        var method = typeof(RoslynInspector).GetMethod("ResolveDotnetExecutablePath", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var original = Environment.GetEnvironmentVariable("DOTNET_EXE");
+        try
+        {
+            Environment.SetEnvironmentVariable("DOTNET_EXE", @"C:\Program Files\dotnet\dotnet.exe");
+
+            var resolved = (string?)method!.Invoke(null, null);
+
+            Assert.Equal(@"C:\Program Files\dotnet\dotnet.exe", resolved);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DOTNET_EXE", original);
+        }
+    }
+
+    /// <summary>
     /// Verifies that TryFindReferences fails gracefully when no projects are loaded.
     /// </summary>
     [Fact]
@@ -560,6 +620,43 @@ public sealed class RoslynInspectorTests
             Assert.NotNull(files);
             Assert.Contains(files!, f => f.EndsWith("Sample.cs"));
             Assert.DoesNotContain(files!, f => f.Contains("obj"));
+        }
+        finally
+        {
+            Directory.Delete(repositoryRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that TryListSourceFiles excludes obj/ files for a nested project path.
+    /// </summary>
+    [Fact]
+    public void TryListSourceFiles_NestedProject_ExcludesObjFiles()
+    {
+        var repositoryRoot = CreateTempRoot();
+        try
+        {
+            var projectDir = Path.Combine(repositoryRoot, "src", "Demo");
+            Directory.CreateDirectory(projectDir);
+
+            File.WriteAllText(Path.Combine(projectDir, "Demo.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(Path.Combine(projectDir, "Sample.cs"), "namespace Demo; public class C { }");
+
+            var objDir = Path.Combine(projectDir, "obj", "Debug", "net9.0");
+            Directory.CreateDirectory(objDir);
+            File.WriteAllText(Path.Combine(objDir, "Demo.GlobalUsings.g.cs"), "// generated");
+
+            var inspector = new RoslynInspector([repositoryRoot]);
+            inspector.LoadProjects(repositoryRoot);
+
+            var success = inspector.TryListSourceFiles(repositoryRoot, Path.Combine("src", "Demo", "Demo.csproj"), out var files, out var error);
+
+            Assert.True(success);
+            Assert.Null(error);
+            Assert.NotNull(files);
+            Assert.Contains(files!, f => f.EndsWith("Sample.cs"));
+            Assert.DoesNotContain(files!, f => f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(files!, f => f.Contains("/obj/", StringComparison.OrdinalIgnoreCase));
         }
         finally
         {
